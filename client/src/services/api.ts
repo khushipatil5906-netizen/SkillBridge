@@ -11,8 +11,11 @@ import {
   RecruiterApplicant,
   AdminUser,
   AdminInstitution,
-  PostJobPayload
+  PostJobPayload,
+  JDFitAnalysisResult,
+  SkillRequirement
 } from '../types';
+import { analyzeStudentForOpportunity } from './jdSkillAnalysis';
 import { PROCTORING_CONFIG } from '../config/proctoring';
 
 const envApiBase = import.meta.env.VITE_API_BASE_URL as string | undefined;
@@ -3365,8 +3368,200 @@ export const apiService = {
         }
       };
     }
+  },
+
+  async getStudentJdAnalysis(studentId: string = 'std_1', opportunityId?: string) {
+    try {
+      const url = opportunityId
+        ? `${API_BASE}/student/jd-analysis?student_id=${studentId}&opportunity_id=${opportunityId}`
+        : `${API_BASE}/student/jd-analysis?student_id=${studentId}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Failed to fetch JD analysis");
+      return await res.json();
+    } catch (err) {
+      console.warn("Using offline fallback for student JD analysis", err);
+      const analyses = FALLBACK_OPPORTUNITIES.map(opp =>
+        analyzeStudentForOpportunity(FALLBACK_STUDENT, opp)
+      ).sort((a, b) => b.overallFit - a.overallFit);
+      return {
+        status: "success",
+        student_id: studentId,
+        total_active_opportunities: analyses.length,
+        analyses,
+        opportunities: analyses
+      };
+    }
+  },
+
+  async getOpportunityApplicantsFit(opportunityId: string, sort: string = 'fit', verdict?: string, minFit?: number) {
+    try {
+      let url = `${API_BASE}/recruiter/opportunities/${opportunityId}/applicants-fit?sort=${sort}`;
+      if (verdict && verdict !== 'ALL') url += `&verdict=${encodeURIComponent(verdict)}`;
+      if (minFit !== undefined && minFit !== null) url += `&min_fit=${minFit}`;
+      const res = await fetch(url, {
+        headers: { 'x-user-role': 'recruiter' }
+      });
+      if (!res.ok) throw new Error("Failed to fetch applicants fit");
+      return await res.json();
+    } catch (err) {
+      console.warn("Using offline fallback for applicants fit", err);
+      const opp = FALLBACK_OPPORTUNITIES.find(o => o.opportunity_id === opportunityId) || FALLBACK_OPPORTUNITIES[0];
+      const analysis = analyzeStudentForOpportunity(FALLBACK_STUDENT, opp);
+      return {
+        status: "success",
+        opportunityId,
+        opportunityTitle: opp.title,
+        company: opp.company,
+        total: 1,
+        applicants: [{
+          applicationId: 'app_demo_1',
+          studentId: FALLBACK_STUDENT.id,
+          studentName: FALLBACK_STUDENT.name,
+          studentEmail: FALLBACK_STUDENT.email,
+          college: FALLBACK_STUDENT.college,
+          department: FALLBACK_STUDENT.department,
+          year: FALLBACK_STUDENT.year,
+          cgpa: FALLBACK_STUDENT.cgpa,
+          avatar: FALLBACK_STUDENT.avatar,
+          isIncognito: false,
+          status: 'Applied',
+          appliedAt: new Date().toISOString(),
+          matchPercentage: opp.match_percentage,
+          jdFitScore: analysis.overallFit,
+          jdFitVerdict: analysis.verdict,
+          jdFitVerdictExplanation: analysis.verdictExplanation,
+          jdFitSummary: analysis.summary,
+          criticalGaps: analysis.criticalGaps,
+          skills: analysis.skills
+        }]
+      };
+    }
+  },
+
+  async getApplicantSkillAnalysis(opportunityId: string, studentId: string) {
+    try {
+      const res = await fetch(`${API_BASE}/recruiter/opportunities/${opportunityId}/applicants/${studentId}/skill-analysis`, {
+        headers: { 'x-user-role': 'recruiter' }
+      });
+      if (!res.ok) throw new Error("Failed to fetch applicant skill analysis");
+      return await res.json();
+    } catch (err) {
+      console.warn("Using offline fallback for applicant skill analysis", err);
+      const opp = FALLBACK_OPPORTUNITIES.find(o => o.opportunity_id === opportunityId) || FALLBACK_OPPORTUNITIES[0];
+      const analysis = analyzeStudentForOpportunity(FALLBACK_STUDENT, opp);
+      return {
+        status: "success",
+        opportunity: { id: opp.opportunity_id, title: opp.title, company: opp.company },
+        candidate: {
+          id: FALLBACK_STUDENT.id,
+          name: FALLBACK_STUDENT.name,
+          email: FALLBACK_STUDENT.email,
+          college: FALLBACK_STUDENT.college,
+          department: FALLBACK_STUDENT.department,
+          year: FALLBACK_STUDENT.year,
+          cgpa: FALLBACK_STUDENT.cgpa,
+          isIncognito: false
+        },
+        analysis
+      };
+    }
+  },
+
+  async getOpportunityFitSummary(opportunityId: string) {
+    try {
+      const res = await fetch(`${API_BASE}/recruiter/opportunities/${opportunityId}/fit-summary`, {
+        headers: { 'x-user-role': 'recruiter' }
+      });
+      if (!res.ok) throw new Error("Failed to fetch fit summary");
+      return await res.json();
+    } catch (err) {
+      console.warn("Using offline fallback for fit summary", err);
+      return {
+        status: "success",
+        opportunityId,
+        totalApplicants: 1,
+        avgFitScore: 88,
+        verdictDistribution: {
+          STRONG_FIT: 1,
+          GOOD_FIT: 0,
+          PARTIAL_FIT: 0,
+          WEAK_FIT: 0
+        },
+        topMissingSkills: [{ skill: "Docker", count: 1 }]
+      };
+    }
+  },
+
+  async getAcademicianRoleGaps(year?: string, opportunityId?: string) {
+    try {
+      let url = `${API_BASE}/academician/role-gaps?`;
+      if (year && year !== 'All') url += `year=${encodeURIComponent(year)}&`;
+      if (opportunityId) url += `opportunity_id=${encodeURIComponent(opportunityId)}&`;
+      const res = await fetch(url, {
+        headers: { 'x-user-role': 'academician' }
+      });
+      if (!res.ok) throw new Error("Failed to fetch role gaps");
+      return await res.json();
+    } catch (err) {
+      console.warn("Using offline fallback for academician role gaps", err);
+      return {
+        status: "success",
+        cohortSize: 8,
+        opportunitiesAnalyzed: 3,
+        roles: FALLBACK_OPPORTUNITIES.map(opp => ({
+          opportunityId: opp.opportunity_id,
+          title: opp.title,
+          company: opp.company,
+          stipend: opp.stipend,
+          location: opp.location,
+          deadline: opp.deadline,
+          avgFitScore: 78.5,
+          verdictDistribution: { STRONG_FIT: 3, GOOD_FIT: 3, PARTIAL_FIT: 1, WEAK_FIT: 1 },
+          topMissingSkills: [
+            { skill: "Docker", missingCount: 4, percentageOfCohort: 50.0, recommendedCourse: "Docker & Container Mastery", provider: "NPTEL / IIT Madras" }
+          ]
+        })),
+        mostInDemandGaps: [
+          { skill: "Docker", importance: "MUST_HAVE", affectedStudentsCount: 4, affectedPercentage: 50.0, demandingRolesCount: 2 },
+          { skill: "TypeScript", importance: "NICE_TO_HAVE", affectedStudentsCount: 3, affectedPercentage: 37.5, demandingRolesCount: 1 }
+        ]
+      };
+    }
+  },
+
+  async getAdminSkillDemandCoverage(minDemand: number = 1) {
+    try {
+      const res = await fetch(`${API_BASE}/admin/analytics/skill-demand-coverage?min_demand=${minDemand}`, {
+        headers: { 'x-user-role': 'admin' }
+      });
+      if (!res.ok) throw new Error("Failed to fetch skill demand coverage");
+      return await res.json();
+    } catch (err) {
+      console.warn("Using offline fallback for admin skill demand coverage", err);
+      return {
+        status: "success",
+        totalActiveOpportunities: 5,
+        totalStudents: 10,
+        uniqueSkillsAnalyzed: 4,
+        criticalDeficitSkillsCount: 1,
+        coverageData: [
+          { skill: "Docker", canonicalName: "docker", rolesDemanding: 3, mustHaveDemand: 2, niceToHaveDemand: 1, avgTargetScore: 75, totalStudents: 10, verifiedCount: 3, proficientCount: 5, unassessedOrMissingCount: 5, coveragePercentage: 30.0, avgStudentScore: 68.0, gapSeverity: "CRITICAL_DEFICIT" },
+          { skill: "Python", canonicalName: "python", rolesDemanding: 4, mustHaveDemand: 4, niceToHaveDemand: 0, avgTargetScore: 80, totalStudents: 10, verifiedCount: 8, proficientCount: 9, unassessedOrMissingCount: 1, coveragePercentage: 80.0, avgStudentScore: 86.5, gapSeverity: "STRONG_SUPPLY" },
+          { skill: "React", canonicalName: "react", rolesDemanding: 2, mustHaveDemand: 2, niceToHaveDemand: 0, avgTargetScore: 75, totalStudents: 10, verifiedCount: 7, proficientCount: 8, unassessedOrMissingCount: 2, coveragePercentage: 70.0, avgStudentScore: 82.0, gapSeverity: "BALANCED" }
+        ],
+        highPriorityInterventions: [
+          { skill: "Docker", canonicalName: "docker", rolesDemanding: 3, coveragePercentage: 30.0, gapSeverity: "CRITICAL_DEFICIT" }
+        ],
+        wellSuppliedSkills: [
+          { skill: "Python", canonicalName: "python", rolesDemanding: 4, coveragePercentage: 80.0, gapSeverity: "STRONG_SUPPLY" }
+        ]
+      };
+    }
   }
 };
+
+export const api = apiService;
+
 
 
 

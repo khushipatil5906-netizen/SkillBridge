@@ -27,6 +27,8 @@ from app.ml.demand_predictor import trend_predictor
 from app.ml.skill_intelligence import skill_intelligence, normalize_skill_name
 from app.routes.auth import require_roles, USER_DB
 from app.services.job_fetcher import sync_and_filter_external_drives, get_last_sync_summary
+from app.services.opportunity_lifecycle import filter_active_opportunities
+from app.services.jd_skill_analysis import derive_requirements_from_opportunity
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
 
@@ -461,6 +463,121 @@ def get_campus_drives_sync_status(auth_check = Depends(require_roles(["admin"]))
         "sync_summary": summary,
         "total_opportunities_in_db": len(OPPORTUNITIES)
     }
+
+@router.get("/analytics/skill-demand-coverage")
+def get_skill_demand_coverage(
+    min_demand: int = Query(1, description="Minimum number of active job postings requiring the skill"),
+    auth_check = Depends(require_roles(["admin"]))
+):
+    """
+    Computes platform-wide skill demand vs student verified coverage.
+    Maps every skill required across live opportunities against student assessment benchmarks.
+    """
+    active_opps = filter_active_opportunities(OPPORTUNITIES, include_expired=False)
+
+    demand_map: Dict[str, Dict[str, Any]] = {}
+
+    for opp in active_opps:
+        reqs = opp.get("skillRequirements")
+        if not reqs:
+            reqs = derive_requirements_from_opportunity(opp)
+
+        for r in reqs:
+            sk_name = r.get("skill", "")
+            if not sk_name:
+                continue
+            canonical = normalize_skill_name(sk_name)
+            if canonical not in demand_map:
+                demand_map[canonical] = {
+                    "skill": sk_name,
+                    "demandingRolesCount": 0,
+                    "mustHaveCount": 0,
+                    "niceToHaveCount": 0,
+                    "targetScores": []
+                }
+            demand_map[canonical]["demandingRolesCount"] += 1
+            if r.get("importance") == "MUST_HAVE":
+                demand_map[canonical]["mustHaveCount"] += 1
+            else:
+                demand_map[canonical]["niceToHaveCount"] += 1
+            target_sc = r.get("targetScore", 70)
+            demand_map[canonical]["targetScores"].append(target_sc)
+
+    coverage_rows = []
+    total_students = len(STUDENTS)
+
+    for canonical, d_info in demand_map.items():
+        if d_info["demandingRolesCount"] < min_demand:
+            continue
+
+        scores = d_info["targetScores"]
+        avg_target = round(sum(scores) / len(scores), 1) if scores else 70.0
+
+        verified_count = 0
+        proficient_count = 0
+        missing_count = 0
+        student_scores = []
+
+        for student in STUDENTS:
+            std_skills = student.get("skills", {})
+            matched_val = None
+            for s_name, val in std_skills.items():
+                if normalize_skill_name(s_name) == canonical:
+                    matched_val = val
+                    break
+
+            if matched_val is not None:
+                sc = matched_val.get("score", 0) if isinstance(matched_val, dict) else int(matched_val)
+                student_scores.append(sc)
+                if sc >= avg_target:
+                    verified_count += 1
+                if sc >= 50:
+                    proficient_count += 1
+            else:
+                missing_count += 1
+
+        avg_std_score = round(sum(student_scores) / len(student_scores), 1) if student_scores else 0.0
+        coverage_pct = round((verified_count / max(1, total_students)) * 100, 1)
+
+        gap_severity = "BALANCED"
+        if d_info["demandingRolesCount"] >= 2 and coverage_pct < 40:
+            gap_severity = "CRITICAL_DEFICIT"
+        elif coverage_pct < 60:
+            gap_severity = "MODERATE_DEFICIT"
+        elif coverage_pct >= 80:
+            gap_severity = "STRONG_SUPPLY"
+
+        coverage_rows.append({
+            "skill": d_info["skill"],
+            "canonicalName": canonical,
+            "rolesDemanding": d_info["demandingRolesCount"],
+            "mustHaveDemand": d_info["mustHaveCount"],
+            "niceToHaveDemand": d_info["niceToHaveCount"],
+            "avgTargetScore": avg_target,
+            "totalStudents": total_students,
+            "verifiedCount": verified_count,
+            "proficientCount": proficient_count,
+            "unassessedOrMissingCount": missing_count,
+            "coveragePercentage": coverage_pct,
+            "avgStudentScore": avg_std_score,
+            "gapSeverity": gap_severity
+        })
+
+    coverage_rows.sort(key=lambda x: (x["rolesDemanding"], -x["coveragePercentage"]), reverse=True)
+    deficit_skills = [r for r in coverage_rows if r["gapSeverity"] in ["CRITICAL_DEFICIT", "MODERATE_DEFICIT"]]
+    surplus_skills = [r for r in coverage_rows if r["gapSeverity"] == "STRONG_SUPPLY"]
+
+    return {
+        "status": "success",
+        "totalActiveOpportunities": len(active_opps),
+        "totalStudents": total_students,
+        "uniqueSkillsAnalyzed": len(coverage_rows),
+        "criticalDeficitSkillsCount": len(deficit_skills),
+        "coverageData": coverage_rows,
+        "highPriorityInterventions": deficit_skills[:5],
+        "wellSuppliedSkills": surplus_skills[:5]
+    }
+
 
 
 

@@ -32,6 +32,8 @@ export const AdminPortalView: React.FC<AdminPortalViewProps> = ({ onNavigateTab 
   const [skillIntelligenceData, setSkillIntelligenceData] = useState<any>(null);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [tenancyMetrics, setTenancyMetrics] = useState<any>(null);
+  const [skillDemandCoverage, setSkillDemandCoverage] = useState<any>(null);
+  const [coverageFilter, setCoverageFilter] = useState<'ALL' | 'CRITICAL_DEFICIT' | 'MODERATE_DEFICIT' | 'STRONG_SUPPLY'>('ALL');
 
   // Feature 1 & 2 Admin Analytics States
   const [talentMatchingAnalytics, setTalentMatchingAnalytics] = useState<any>(null);
@@ -70,7 +72,7 @@ export const AdminPortalView: React.FC<AdminPortalViewProps> = ({ onNavigateTab 
   const loadAdminData = async () => {
     setLoading(true);
     try {
-      const [dashRes, usersRes, instRes, appRes, scRes, procRes, intelRes, auditRes, tenRes, talentMatchRes, collabRes, revealLogsRes, integAuditsRes, integCfgRes, syncStatusRes] = await Promise.all([
+      const [dashRes, usersRes, instRes, appRes, scRes, procRes, intelRes, auditRes, tenRes, talentMatchRes, collabRes, revealLogsRes, integAuditsRes, integCfgRes, syncStatusRes, demandCovRes] = await Promise.all([
         apiService.getAdminDashboard(),
         apiService.getAdminUsers(),
         apiService.getAdminInstitutions(),
@@ -85,7 +87,8 @@ export const AdminPortalView: React.FC<AdminPortalViewProps> = ({ onNavigateTab 
         apiService.getAdminIdentityRevealLogs().catch(() => ({ reveal_logs: [] })),
         apiService.getIntegrityAuditLogs('admin').catch(() => ({ attempts: [] })),
         apiService.getIntegrityConfig().catch(() => ({ config: null })),
-        apiService.getCampusDrivesSyncStatus().catch(() => null)
+        apiService.getCampusDrivesSyncStatus().catch(() => null),
+        apiService.getAdminSkillDemandCoverage().catch(() => null)
       ]);
 
       setDashboardData(dashRes);
@@ -101,6 +104,7 @@ export const AdminPortalView: React.FC<AdminPortalViewProps> = ({ onNavigateTab 
       setCollaborationAnalytics(collabRes);
       setIdentityRevealLogs(revealLogsRes?.reveal_logs || []);
       setIntegrityAudits(integAuditsRes);
+      setSkillDemandCoverage(demandCovRes || null);
       if (syncStatusRes?.sync_summary) {
         setSyncSummary(syncStatusRes.sync_summary);
       }
@@ -1315,6 +1319,157 @@ export const AdminPortalView: React.FC<AdminPortalViewProps> = ({ onNavigateTab 
                         <td className="py-3 px-4 text-slate-500 font-mono text-[11px]">{sk.category}</td>
                       </tr>
                     ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Skill Demand vs Student Verified Coverage Section */}
+            <div className="space-y-4 pt-4 border-t border-slate-200 dark:border-slate-800">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-indigo-600 block">
+                    Macro Skill Intelligence
+                  </span>
+                  <h4 className="text-base font-black text-slate-900 dark:text-white mt-0.5">
+                    Platform Skill Demand vs Student Verified Coverage
+                  </h4>
+                  <p className="text-xs text-slate-500">
+                    Live analysis of skill requirements across all active recruiter postings compared against verified student cohort assessment benchmarks.
+                  </p>
+                </div>
+
+                {/* Filter buttons */}
+                <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-900 rounded-xl text-xs font-bold shrink-0">
+                  {(['ALL', 'CRITICAL_DEFICIT', 'MODERATE_DEFICIT', 'STRONG_SUPPLY'] as const).map((filterKey) => (
+                    <button
+                      key={filterKey}
+                      type="button"
+                      onClick={() => setCoverageFilter(filterKey)}
+                      className={`px-3 py-1.5 rounded-lg transition ${
+                        coverageFilter === filterKey
+                          ? 'bg-white dark:bg-card-dark text-slate-900 dark:text-white shadow-xs'
+                          : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                      }`}
+                    >
+                      {filterKey === 'ALL' ? 'All Skills' : filterKey.replace('_', ' ')}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Summary KPIs */}
+              {skillDemandCoverage && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800">
+                    <span className="text-[10px] font-mono font-bold uppercase text-slate-400">Total Demanded Skills</span>
+                    <div className="text-xl font-black text-slate-900 dark:text-white mt-1">
+                      {skillDemandCoverage.uniqueSkillsAnalyzed || 0}
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-rose-50/50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900/40">
+                    <span className="text-[10px] font-mono font-bold uppercase text-rose-600 dark:text-rose-400">Critical Deficits Flagged</span>
+                    <div className="text-xl font-black text-rose-600 dark:text-rose-400 mt-1">
+                      {skillDemandCoverage.criticalDeficitSkillsCount || 0}
+                    </div>
+                    <span className="text-[10px] text-rose-500 font-semibold">&lt;40% Verified Supply</span>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-200 dark:border-indigo-900/40">
+                    <span className="text-[10px] font-mono font-bold uppercase text-indigo-600 dark:text-indigo-400">Active Job Postings</span>
+                    <div className="text-xl font-black text-indigo-600 dark:text-indigo-400 mt-1">
+                      {skillDemandCoverage.totalActiveOpportunities || 0}
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/40">
+                    <span className="text-[10px] font-mono font-bold uppercase text-emerald-600 dark:text-emerald-400">Assessed Students</span>
+                    <div className="text-xl font-black text-emerald-600 dark:text-emerald-400 mt-1">
+                      {skillDemandCoverage.totalStudents || 0}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Coverage Table */}
+              <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 font-bold text-slate-700 dark:text-slate-300">
+                    <tr>
+                      <th className="py-3 px-4">Demanded Skill</th>
+                      <th className="py-3 px-4 text-center">Live Roles Demanding</th>
+                      <th className="py-3 px-4 text-center">Avg Required Cutoff</th>
+                      <th className="py-3 px-4 text-center">Verified Students (% Pool)</th>
+                      <th className="py-3 px-4 text-center">Cohort Avg Score</th>
+                      <th className="py-3 px-4 text-center">Severity Status</th>
+                      <th className="py-3 px-4 text-right">Recommended Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {(() => {
+                      const rawList = skillDemandCoverage?.coverageData || [
+                        { skill: "Python", rolesDemanding: 3, mustHaveDemand: 3, niceToHaveDemand: 0, avgTargetScore: 75, verifiedCount: 4, totalStudents: 4, coveragePercentage: 100, avgStudentScore: 81, gapSeverity: "STRONG_SUPPLY" },
+                        { skill: "SQL", rolesDemanding: 3, mustHaveDemand: 2, niceToHaveDemand: 1, avgTargetScore: 70, verifiedCount: 3, totalStudents: 4, coveragePercentage: 75, avgStudentScore: 70, gapSeverity: "MODERATE_DEFICIT" },
+                        { skill: "FastAPI", rolesDemanding: 2, mustHaveDemand: 1, niceToHaveDemand: 1, avgTargetScore: 75, verifiedCount: 2, totalStudents: 4, coveragePercentage: 50, avgStudentScore: 82, gapSeverity: "MODERATE_DEFICIT" },
+                        { skill: "Cloud Computing", rolesDemanding: 2, mustHaveDemand: 2, niceToHaveDemand: 0, avgTargetScore: 70, verifiedCount: 1, totalStudents: 4, coveragePercentage: 25, avgStudentScore: 48, gapSeverity: "CRITICAL_DEFICIT" },
+                        { skill: "Docker", rolesDemanding: 2, mustHaveDemand: 2, niceToHaveDemand: 0, avgTargetScore: 70, verifiedCount: 0, totalStudents: 4, coveragePercentage: 0, avgStudentScore: 32, gapSeverity: "CRITICAL_DEFICIT" }
+                      ];
+
+                      const filtered = coverageFilter === 'ALL'
+                        ? rawList
+                        : rawList.filter((r: any) => r.gapSeverity === coverageFilter);
+
+                      return filtered.map((row: any) => (
+                        <tr key={row.skill} className="hover:bg-slate-50/50 dark:hover:bg-slate-900/50 transition">
+                          <td className="py-3 px-4">
+                            <span className="font-bold text-slate-900 dark:text-white block">{row.skill}</span>
+                            <span className="text-[10px] text-slate-400 font-mono">
+                              {row.mustHaveDemand} Must-Have • {row.niceToHaveDemand} Nice-to-Have
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-center font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                            {row.rolesDemanding} postings
+                          </td>
+                          <td className="py-3 px-4 text-center font-mono text-slate-700 dark:text-slate-300">
+                            &gt;={row.avgTargetScore}%
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            <div className="inline-flex flex-col items-center">
+                              <span className="font-mono font-bold text-slate-800 dark:text-slate-200">
+                                {row.verifiedCount} / {row.totalStudents} ({row.coveragePercentage}%)
+                              </span>
+                              <div className="w-20 h-1.5 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden mt-1">
+                                <div
+                                  className={`h-full ${row.coveragePercentage >= 70 ? 'bg-emerald-500' : row.coveragePercentage >= 40 ? 'bg-amber-500' : 'bg-rose-500'}`}
+                                  style={{ width: `${Math.min(100, row.coveragePercentage)}%` }}
+                                />
+                              </div>
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 text-center font-mono font-bold text-slate-700 dark:text-slate-300">
+                            {row.avgStudentScore}%
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold inline-block ${
+                              row.gapSeverity === 'CRITICAL_DEFICIT'
+                                ? 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
+                                : row.gapSeverity === 'MODERATE_DEFICIT'
+                                ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                                : row.gapSeverity === 'STRONG_SUPPLY'
+                                ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                                : 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300'
+                            }`}>
+                              {row.gapSeverity.replace('_', ' ')}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-400">
+                              {row.gapSeverity === 'CRITICAL_DEFICIT' ? '🚨 Trigger Bootcamp' :
+                               row.gapSeverity === 'MODERATE_DEFICIT' ? '⚡ Offer Elective Lab' :
+                               row.gapSeverity === 'STRONG_SUPPLY' ? '✓ Recruiter Ready' : 'Balanced'}
+                            </span>
+                          </td>
+                        </tr>
+                      ));
+                    })()}
                   </tbody>
                 </table>
               </div>

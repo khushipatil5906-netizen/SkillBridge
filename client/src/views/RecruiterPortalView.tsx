@@ -3,10 +3,15 @@ import {
   Briefcase, Users, PlusCircle, CheckCircle2, AlertCircle, TrendingUp, 
   Search, Filter, ChevronRight, Sparkles, Building, Mail, ShieldCheck, 
   ExternalLink, Clock, Award, XCircle, ArrowRight, Eye, RefreshCw, Send, 
-  FileCheck, Lock, Unlock, EyeOff, FolderGit2, Check, UserCheck
+  FileCheck, Lock, Unlock, EyeOff, FolderGit2, Check, UserCheck,
+  CheckSquare, Square, Sliders, BarChart3, HelpCircle, X
 } from 'lucide-react';
 import { apiService } from '../services/api';
-import { RecruiterApplicant, PostJobPayload, IncognitoTalentCandidate, TalentInvitation, CollaborationProject } from '../types';
+import { 
+  RecruiterApplicant, PostJobPayload, IncognitoTalentCandidate, TalentInvitation, 
+  CollaborationProject, SkillRequirement, JDFitVerdict, JDFitSummary, JDFitAnalysisResult 
+} from '../types';
+import { analyzeStudentForOpportunity } from '../services/jdSkillAnalysis';
 import { CandidatePassportModal } from '../components/modals/CandidatePassportModal';
 import { OutcomeFeedbackModal } from '../components/modals/OutcomeFeedbackModal';
 
@@ -87,6 +92,18 @@ export const RecruiterPortalView: React.FC<RecruiterPortalViewProps> = ({
   // Selected Applicant for Detail Drawer / Modal
   const [selectedApplicant, setSelectedApplicant] = useState<RecruiterApplicant | null>(null);
   const [statusUpdatingId, setStatusUpdatingId] = useState<string | null>(null);
+
+  // JD Skill Analysis & Candidate Selection States
+  const [skillImportance, setSkillImportance] = useState<Record<string, 'MUST_HAVE' | 'NICE_TO_HAVE'>>({});
+  const [selectedApplicantIds, setSelectedApplicantIds] = useState<string[]>([]);
+  const [topNCount, setTopNCount] = useState<number>(5);
+  const [verdictFilter, setVerdictFilter] = useState<string>('All');
+  const [sortByFit, setSortByFit] = useState<'fit_desc' | 'fit_asc' | 'score_desc' | 'none'>('fit_desc');
+  const [analysisModalData, setAnalysisModalData] = useState<{
+    applicant: RecruiterApplicant;
+    analysis: JDFitAnalysisResult | null;
+    loading: boolean;
+  } | null>(null);
 
   // Show Toast Notification
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
@@ -192,8 +209,34 @@ export const RecruiterPortalView: React.FC<RecruiterPortalViewProps> = ({
       return;
     }
 
+    // Structured JD Skill Requirements for explainable analysis
+    const structuredReqs: SkillRequirement[] = [
+      ...jobForm.required_skills.map((sk) => {
+        const cutoff = jobForm.min_skill_proficiencies?.[sk] ?? jobForm.min_verified_score;
+        return {
+          skill: sk,
+          importance: (skillImportance[sk] || 'MUST_HAVE') as 'MUST_HAVE' | 'NICE_TO_HAVE',
+          targetLevel: cutoff,
+          min_level: cutoff >= 80 ? 'ADVANCED' as const : cutoff >= 60 ? 'INTERMEDIATE' as const : 'BEGINNER' as const,
+          min_score: cutoff
+        };
+      }),
+      ...(jobForm.good_to_have || []).map((sk) => ({
+        skill: sk,
+        importance: 'NICE_TO_HAVE' as const,
+        targetLevel: 60,
+        min_level: 'INTERMEDIATE' as const,
+        min_score: 60
+      }))
+    ];
+
     try {
-      const res = await apiService.postRecruiterJob(jobForm, recruiterEmail);
+      const payload: PostJobPayload = {
+        ...jobForm,
+        skill_requirements: structuredReqs,
+        skillRequirements: structuredReqs
+      };
+      const res = await apiService.postRecruiterJob(payload, recruiterEmail);
       if (res.status === 'success') {
         showToast(`Job listing '${jobForm.title}' published successfully! Live for AI matching and campus drives.`, 'success');
         // Reset form & reload
@@ -289,6 +332,69 @@ export const RecruiterPortalView: React.FC<RecruiterPortalViewProps> = ({
     }
   };
 
+  // Select Top N candidates by JD Fit Score (Pre-selects checkboxes only)
+  const handleSelectTopN = (n: number) => {
+    const sorted = [...displayedApplicants].sort((a, b) => {
+      const scA = a.jdFitScore ?? a.match_percentage ?? 0;
+      const scB = b.jdFitScore ?? b.match_percentage ?? 0;
+      return scB - scA;
+    });
+    const topIds = sorted.slice(0, Math.max(1, n)).map(a => a.id);
+    setSelectedApplicantIds(topIds);
+    showToast(`Pre-selected top ${topIds.length} candidate(s) by JD Fit. Checkboxes marked for bulk review.`, 'info');
+  };
+
+  const handleToggleSelectApplicant = (id: string) => {
+    setSelectedApplicantIds(prev => 
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
+
+  const handleToggleSelectAll = () => {
+    if (selectedApplicantIds.length === displayedApplicants.length && displayedApplicants.length > 0) {
+      setSelectedApplicantIds([]);
+    } else {
+      setSelectedApplicantIds(displayedApplicants.map(a => a.id));
+    }
+  };
+
+  const handleBulkUpdateStatus = async (status: string) => {
+    if (selectedApplicantIds.length === 0) return;
+    for (const id of selectedApplicantIds) {
+      await handleUpdateStatus(id, status);
+    }
+    showToast(`Updated ${selectedApplicantIds.length} candidate(s) to ${status}.`, 'success');
+    setSelectedApplicantIds([]);
+  };
+
+  // Open Detailed JD Skill Analysis Modal
+  const handleOpenAnalysisModal = async (app: RecruiterApplicant) => {
+    setAnalysisModalData({ applicant: app, analysis: null, loading: true });
+    try {
+      if (app.opportunity_id) {
+        const res = await apiService.getApplicantSkillAnalysis(app.opportunity_id, app.student_id);
+        if (res?.analysis) {
+          setAnalysisModalData({ applicant: app, analysis: res.analysis, loading: false });
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn("Backend analysis fetch failed, falling back to client evaluation:", e);
+    }
+
+    // Client-side fallback evaluation
+    const matchingJob = jobs.find(j => j.id === app.opportunity_id);
+    const fallbackAnalysis = analyzeStudentForOpportunity(
+      { skills: app.matched_skills.reduce((acc, s) => ({ ...acc, [s]: 80 }), {}) },
+      matchingJob?.skillRequirements || matchingJob?.skill_requirements || [
+        ...app.matched_skills.map(s => ({ skill: s, importance: 'MUST_HAVE' as const, min_score: 70 })),
+        ...app.missing_skills.map(s => ({ skill: s, importance: 'MUST_HAVE' as const, min_score: 70 }))
+      ],
+      { opportunity: matchingJob }
+    );
+    setAnalysisModalData({ applicant: app, analysis: fallbackAnalysis, loading: false });
+  };
+
   // Filtered applicants
   const filteredApplicants = applicants.filter(app => {
     const matchesStatus = statusFilter === 'All' || app.status.toLowerCase() === statusFilter.toLowerCase();
@@ -297,7 +403,18 @@ export const RecruiterPortalView: React.FC<RecruiterPortalViewProps> = ({
       app.student_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       app.college.toLowerCase().includes(searchQuery.toLowerCase()) ||
       app.matched_skills.some(s => s.toLowerCase().includes(searchQuery.toLowerCase()));
-    return matchesStatus && matchesJob && matchesSearch;
+    const verd = app.jdFitVerdict || (app as any).jd_fit_verdict;
+    const matchesVerdict = verdictFilter === 'All' || verd === verdictFilter;
+    return matchesStatus && matchesJob && matchesSearch && matchesVerdict;
+  });
+
+  const displayedApplicants = [...filteredApplicants].sort((a, b) => {
+    const scoreA = a.jdFitScore ?? a.match_percentage ?? 0;
+    const scoreB = b.jdFitScore ?? b.match_percentage ?? 0;
+    if (sortByFit === 'fit_desc') return scoreB - scoreA;
+    if (sortByFit === 'fit_asc') return scoreA - scoreB;
+    if (sortByFit === 'score_desc') return (b.match_percentage || 0) - (a.match_percentage || 0);
+    return 0;
   });
 
   return (
@@ -621,6 +738,66 @@ export const RecruiterPortalView: React.FC<RecruiterPortalViewProps> = ({
             </div>
           </div>
 
+          {/* Top Matched by JD Fit Highlight Card */}
+          <div className="p-6 rounded-3xl bg-linear-to-r from-indigo-900 via-indigo-950 to-slate-900 text-white shadow-md space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center">
+                  <Sparkles className="w-5 h-5 text-indigo-300" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-white">Top Matched by JD Fit</h3>
+                  <p className="text-xs text-indigo-200">
+                    Candidate skill profiles scored deterministically against strict job requirements
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setSortByFit('fit_desc');
+                  setActiveSubTab('applicants');
+                }}
+                className="px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold text-white transition flex items-center gap-1.5 border border-white/10 cursor-pointer"
+              >
+                <span>Pipeline View</span>
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
+              {[...applicants]
+                .sort((a, b) => ((b.jdFitScore ?? b.match_percentage) - (a.jdFitScore ?? a.match_percentage)))
+                .slice(0, 4)
+                .map((topApp) => (
+                  <div
+                    key={topApp.id}
+                    onClick={() => {
+                      handleOpenAnalysisModal(topApp);
+                    }}
+                    className="p-3.5 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 transition cursor-pointer space-y-2 group"
+                  >
+                    <div className="flex items-start justify-between">
+                      <span className="font-bold text-xs text-white group-hover:text-indigo-300 transition truncate max-w-[120px]">
+                        {topApp.student_name}
+                      </span>
+                      <span className="font-black text-sm text-emerald-400">
+                        {topApp.jdFitScore !== undefined ? `${topApp.jdFitScore}%` : `${topApp.match_percentage}%`}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-300 truncate">
+                      {topApp.title}
+                    </div>
+                    <div className="flex items-center justify-between pt-1 border-t border-white/10 text-[10px]">
+                      <span className="text-slate-400 truncate max-w-[90px]">{topApp.college}</span>
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-400/20">
+                        {(topApp.jdFitVerdict || 'STRONG_FIT').replace('_', ' ')}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </div>
+
           {/* Quick Applicants Grid */}
           <div className="p-6 rounded-3xl bg-white dark:bg-card-dark border border-slate-200/90 dark:border-slate-800 shadow-xs space-y-4">
             <div className="flex items-center justify-between">
@@ -649,9 +826,21 @@ export const RecruiterPortalView: React.FC<RecruiterPortalViewProps> = ({
                           {app.college} • {app.department}
                         </p>
                       </div>
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
-                        {app.match_percentage}% Fit
-                      </span>
+                      <div className="flex flex-col items-end gap-1">
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+                          {app.match_percentage}% Fit
+                        </span>
+                        {app.jdFitVerdict && (
+                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${
+                            app.jdFitVerdict === 'STRONG_FIT' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
+                            app.jdFitVerdict === 'GOOD_FIT' ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' :
+                            app.jdFitVerdict === 'PARTIAL_FIT' ? 'bg-amber-50 text-amber-700 border border-amber-200' :
+                            'bg-rose-50 text-rose-700 border border-rose-200'
+                          }`}>
+                            {app.jdFitScore !== undefined ? `${app.jdFitScore}% ` : ''}{app.jdFitVerdict.replace('_', ' ')}
+                          </span>
+                        )}
+                      </div>
                     </div>
 
                     <div className="text-[11px] text-slate-600 dark:text-slate-300 font-medium">
@@ -912,30 +1101,54 @@ export const RecruiterPortalView: React.FC<RecruiterPortalViewProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
                 {jobForm.required_skills.map((sk) => {
                   const currentCutoff = jobForm.min_skill_proficiencies?.[sk] ?? jobForm.min_verified_score;
+                  const importance = skillImportance[sk] || 'MUST_HAVE';
                   return (
-                    <div key={sk} className="p-2.5 rounded-xl bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
-                      <span className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">{sk}</span>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <span className="text-[11px] font-mono font-bold text-indigo-600 dark:text-indigo-400">&gt;=</span>
-                        <input
-                          type="number"
-                          min={40}
-                          max={95}
-                          step={5}
-                          value={currentCutoff}
-                          onChange={(e) => {
-                            const val = parseInt(e.target.value) || 70;
-                            setJobForm({
-                              ...jobForm,
-                              min_skill_proficiencies: {
-                                ...(jobForm.min_skill_proficiencies || {}),
-                                [sk]: val
-                              }
-                            });
+                    <div key={sk} className="p-3 rounded-xl bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 flex flex-col gap-2">
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">{sk}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSkillImportance(prev => ({
+                              ...prev,
+                              [sk]: (prev[sk] || 'MUST_HAVE') === 'MUST_HAVE' ? 'NICE_TO_HAVE' : 'MUST_HAVE'
+                            }));
                           }}
-                          className="w-14 px-1.5 py-0.5 rounded border border-slate-200 dark:border-slate-700 text-center font-mono font-bold text-xs"
-                        />
-                        <span className="text-[11px] text-slate-400 font-mono">%</span>
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold transition border ${
+                            importance === 'MUST_HAVE'
+                              ? 'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/60 dark:text-rose-300 dark:border-rose-800'
+                              : 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/60 dark:text-blue-300 dark:border-blue-800'
+                          }`}
+                          title="Click to toggle importance between Must Have and Nice to Have"
+                        >
+                          {importance === 'MUST_HAVE' ? '★ Must Have' : '☆ Nice to Have'}
+                        </button>
+                      </div>
+
+                      <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-100 dark:border-slate-800/80">
+                        <span className="text-[11px] text-slate-500">Min Proficiency:</span>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <span className="text-[11px] font-mono font-bold text-indigo-600 dark:text-indigo-400">&gt;=</span>
+                          <input
+                            type="number"
+                            min={40}
+                            max={95}
+                            step={5}
+                            value={currentCutoff}
+                            onChange={(e) => {
+                              const val = parseInt(e.target.value) || 70;
+                              setJobForm({
+                                ...jobForm,
+                                min_skill_proficiencies: {
+                                  ...(jobForm.min_skill_proficiencies || {}),
+                                  [sk]: val
+                                }
+                              });
+                            }}
+                            className="w-14 px-1.5 py-0.5 rounded border border-slate-200 dark:border-slate-700 text-center font-mono font-bold text-xs"
+                          />
+                          <span className="text-[11px] text-slate-400 font-mono">%</span>
+                        </div>
                       </div>
                     </div>
                   );
@@ -1057,10 +1270,62 @@ export const RecruiterPortalView: React.FC<RecruiterPortalViewProps> = ({
       {/* SUB-VIEW 4: APPLICANTS PIPELINE (PART 18, 19, 20) */}
       {activeSubTab === 'applicants' && (
         <div className="space-y-6">
+          {/* Fit Summary Strip */}
+          {(() => {
+            const currentPool = selectedJobFilter === 'All' 
+              ? applicants 
+              : applicants.filter(a => a.opportunity_id === selectedJobFilter || a.title === selectedJobFilter);
+            const strongCount = currentPool.filter(a => (a.jdFitVerdict || (a as any).jd_fit_verdict) === 'STRONG_FIT').length;
+            const goodCount = currentPool.filter(a => (a.jdFitVerdict || (a as any).jd_fit_verdict) === 'GOOD_FIT').length;
+            const partialCount = currentPool.filter(a => (a.jdFitVerdict || (a as any).jd_fit_verdict) === 'PARTIAL_FIT').length;
+            const needsWorkCount = currentPool.filter(a => {
+              const v = a.jdFitVerdict || (a as any).jd_fit_verdict;
+              return v === 'NEEDS_WORK' || v === 'WEAK_FIT';
+            }).length;
+            const avgFitScore = currentPool.length > 0
+              ? Math.round(currentPool.reduce((acc, a) => acc + (a.jdFitScore ?? a.match_percentage ?? 0), 0) / currentPool.length)
+              : 0;
+
+            return (
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                <div className="p-3.5 rounded-2xl bg-white dark:bg-card-dark border border-slate-200/90 dark:border-slate-800 shadow-xs">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Total Applicants</span>
+                  <div className="text-xl font-black text-slate-900 dark:text-white mt-1">{currentPool.length}</div>
+                  <span className="text-[10px] text-slate-400">In Active Scope</span>
+                </div>
+                <div className="p-3.5 rounded-2xl bg-emerald-50/40 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/40 shadow-xs">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">Strong Fit</span>
+                  <div className="text-xl font-black text-emerald-600 dark:text-emerald-400 mt-1">{strongCount}</div>
+                  <span className="text-[10px] text-emerald-600 font-semibold">{currentPool.length ? Math.round((strongCount / currentPool.length) * 100) : 0}% of pool</span>
+                </div>
+                <div className="p-3.5 rounded-2xl bg-indigo-50/40 dark:bg-indigo-950/20 border border-indigo-200 dark:border-indigo-900/40 shadow-xs">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">Good Fit</span>
+                  <div className="text-xl font-black text-indigo-600 dark:text-indigo-400 mt-1">{goodCount}</div>
+                  <span className="text-[10px] text-indigo-600 font-semibold">{currentPool.length ? Math.round((goodCount / currentPool.length) * 100) : 0}% of pool</span>
+                </div>
+                <div className="p-3.5 rounded-2xl bg-amber-50/40 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/40 shadow-xs">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400">Partial Fit</span>
+                  <div className="text-xl font-black text-amber-600 dark:text-amber-400 mt-1">{partialCount}</div>
+                  <span className="text-[10px] text-amber-600 font-semibold">{currentPool.length ? Math.round((partialCount / currentPool.length) * 100) : 0}% (Gap Capped)</span>
+                </div>
+                <div className="p-3.5 rounded-2xl bg-rose-50/40 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900/40 shadow-xs">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-rose-600 dark:text-rose-400">Needs Work</span>
+                  <div className="text-xl font-black text-rose-600 dark:text-rose-400 mt-1">{needsWorkCount}</div>
+                  <span className="text-[10px] text-rose-600 font-semibold">{currentPool.length ? Math.round((needsWorkCount / currentPool.length) * 100) : 0}% of pool</span>
+                </div>
+                <div className="p-3.5 rounded-2xl bg-purple-50/40 dark:bg-purple-950/20 border border-purple-200 dark:border-purple-900/40 shadow-xs">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-purple-600 dark:text-purple-400">Average Fit</span>
+                  <div className="text-xl font-black text-purple-600 dark:text-purple-400 mt-1">{avgFitScore}%</div>
+                  <span className="text-[10px] text-purple-600 font-semibold">Explainable Formula</span>
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Controls bar */}
           <div className="p-4 rounded-2xl bg-white dark:bg-card-dark border border-slate-200/90 dark:border-slate-800 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="flex items-center gap-3 flex-1">
-              <div className="relative flex-1 max-w-sm">
+            <div className="flex items-center gap-3 flex-1 flex-wrap">
+              <div className="relative flex-1 min-w-[200px] max-w-sm">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
                 <input
                   type="text"
@@ -1086,6 +1351,31 @@ export const RecruiterPortalView: React.FC<RecruiterPortalViewProps> = ({
                 <option value="Rejected">Rejected</option>
               </select>
 
+              {/* Verdict Filter */}
+              <select
+                value={verdictFilter}
+                onChange={(e) => setVerdictFilter(e.target.value)}
+                className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-800 dark:text-slate-200"
+              >
+                <option value="All">All Verdicts</option>
+                <option value="STRONG_FIT">Strong Fit</option>
+                <option value="GOOD_FIT">Good Fit</option>
+                <option value="PARTIAL_FIT">Partial Fit</option>
+                <option value="NEEDS_WORK">Needs Work</option>
+              </select>
+
+              {/* Sort by Fit */}
+              <select
+                value={sortByFit}
+                onChange={(e) => setSortByFit(e.target.value as any)}
+                className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-800 dark:text-slate-200"
+              >
+                <option value="fit_desc">Sort: JD Fit (High → Low)</option>
+                <option value="fit_asc">Sort: JD Fit (Low → High)</option>
+                <option value="score_desc">Sort: AI Match %</option>
+                <option value="none">Sort: Default</option>
+              </select>
+
               {/* Job Filter */}
               <select
                 value={selectedJobFilter}
@@ -1097,12 +1387,71 @@ export const RecruiterPortalView: React.FC<RecruiterPortalViewProps> = ({
                   <option key={j.id} value={j.id}>{j.title}</option>
                 ))}
               </select>
+
+              {/* Select Top N by Fit Helper */}
+              <div className="flex items-center gap-1.5 p-1 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800">
+                <span className="text-[11px] font-bold text-indigo-900 dark:text-indigo-200 pl-1.5">Top</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={displayedApplicants.length || 10}
+                  value={topNCount}
+                  onChange={(e) => setTopNCount(Math.max(1, parseInt(e.target.value) || 1))}
+                  className="w-10 px-1 py-1 rounded-lg border border-indigo-200 dark:border-indigo-700 bg-white dark:bg-slate-900 text-xs text-center font-bold"
+                />
+                <button
+                  type="button"
+                  onClick={() => handleSelectTopN(topNCount)}
+                  className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold transition whitespace-nowrap"
+                  title="Pre-select candidate checkboxes only (does not automatically change status)"
+                >
+                  Select by Fit
+                </button>
+              </div>
             </div>
 
-            <div className="text-xs text-slate-500 font-semibold">
-              Showing <strong>{filteredApplicants.length}</strong> verified applicants
+            <div className="text-xs text-slate-500 font-semibold shrink-0">
+              Showing <strong>{displayedApplicants.length}</strong> verified applicants
             </div>
           </div>
+
+          {/* Bulk Selection Actions Bar */}
+          {selectedApplicantIds.length > 0 && (
+            <div className="p-3.5 rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                <span className="text-xs font-bold text-indigo-950 dark:text-indigo-100">
+                  {selectedApplicantIds.length} candidate(s) selected
+                </span>
+                <span className="text-[11px] text-indigo-600 dark:text-indigo-300">
+                  (Pre-selected checkboxes. Use actions to process in bulk)
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleBulkUpdateStatus('Shortlisted')}
+                  className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition shadow-xs"
+                >
+                  Shortlist Selected ({selectedApplicantIds.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleBulkUpdateStatus('Interview')}
+                  className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition shadow-xs"
+                >
+                  Interview Selected ({selectedApplicantIds.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedApplicantIds([])}
+                  className="px-2.5 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-bold hover:bg-slate-300 transition"
+                >
+                  Clear Selection
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Applicants Table */}
           <div className="rounded-3xl bg-white dark:bg-card-dark border border-slate-200/90 dark:border-slate-800 shadow-xs overflow-hidden">
@@ -1110,24 +1459,42 @@ export const RecruiterPortalView: React.FC<RecruiterPortalViewProps> = ({
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                    <th className="py-3 px-3 text-center w-10">
+                      <input
+                        type="checkbox"
+                        checked={selectedApplicantIds.length > 0 && selectedApplicantIds.length === displayedApplicants.length}
+                        onChange={handleToggleSelectAll}
+                        className="rounded border-slate-300 dark:border-slate-700 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                        title="Select All / None"
+                      />
+                    </th>
                     <th className="py-3 px-4">Candidate & College</th>
                     <th className="py-3 px-4">Applied Opening</th>
                     <th className="py-3 px-4">AI Match Fit</th>
+                    <th className="py-3 px-4">JD Skill Fit</th>
                     <th className="py-3 px-4">Verified Skill Evidence</th>
                     <th className="py-3 px-4">Status</th>
                     <th className="py-3 px-4 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
-                  {filteredApplicants.length === 0 ? (
+                  {displayedApplicants.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="py-12 text-center text-slate-400">
+                      <td colSpan={8} className="py-12 text-center text-slate-400">
                         No applicants found matching this filter criteria.
                       </td>
                     </tr>
                   ) : (
-                    filteredApplicants.map((app) => (
-                      <tr key={app.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition">
+                    displayedApplicants.map((app) => (
+                      <tr key={app.id} className={`hover:bg-slate-50 dark:hover:bg-slate-800/40 transition ${selectedApplicantIds.includes(app.id) ? 'bg-indigo-50/30 dark:bg-indigo-950/20' : ''}`}>
+                        <td className="py-3.5 px-3 text-center">
+                          <input
+                            type="checkbox"
+                            checked={selectedApplicantIds.includes(app.id)}
+                            onChange={() => handleToggleSelectApplicant(app.id)}
+                            className="rounded border-slate-300 dark:border-slate-700 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                          />
+                        </td>
                         <td className="py-3.5 px-4">
                           <div className="font-bold text-slate-900 dark:text-white">
                             {app.student_name}
@@ -1157,6 +1524,40 @@ export const RecruiterPortalView: React.FC<RecruiterPortalViewProps> = ({
                           <span className="text-[10px] text-slate-400 truncate max-w-xs block">
                             {app.explanation}
                           </span>
+                        </td>
+
+                        {/* JD Skill Fit Column */}
+                        <td className="py-3.5 px-4">
+                          <div className="flex items-center gap-2">
+                            <span className="font-black text-sm text-indigo-600 dark:text-indigo-400">
+                              {app.jdFitScore !== undefined ? `${app.jdFitScore}%` : `${app.match_percentage}%`}
+                            </span>
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              (app.jdFitVerdict || 'GOOD_FIT') === 'STRONG_FIT' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' :
+                              (app.jdFitVerdict || 'GOOD_FIT') === 'GOOD_FIT' ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300' :
+                              (app.jdFitVerdict || 'GOOD_FIT') === 'PARTIAL_FIT' ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300' :
+                              'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
+                            }`}>
+                              {(app.jdFitVerdict || 'GOOD_FIT').replace('_', ' ')}
+                            </span>
+                          </div>
+                          {app.criticalGaps && app.criticalGaps.length > 0 ? (
+                            <div className="text-[10px] text-rose-500 font-medium truncate max-w-[170px] mt-0.5">
+                              Gap: {app.criticalGaps.join(', ')}
+                            </div>
+                          ) : (
+                            <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium mt-0.5">
+                              All Must-Haves Met
+                            </div>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleOpenAnalysisModal(app)}
+                            className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 mt-1"
+                          >
+                            <Sparkles className="w-3 h-3" />
+                            <span>Skill Breakdown</span>
+                          </button>
                         </td>
 
                         <td className="py-3.5 px-4">
@@ -1947,6 +2348,182 @@ export const RecruiterPortalView: React.FC<RecruiterPortalViewProps> = ({
             loadRecruiterData();
           }}
         />
+      )}
+
+      {/* Applicant JD Skill Analysis Modal */}
+      {analysisModalData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white dark:bg-card-dark rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl max-w-2xl w-full p-6 space-y-5 my-8">
+            <div className="flex items-start justify-between border-b border-slate-100 dark:border-slate-800 pb-4">
+              <div>
+                <span className="text-[10px] font-mono font-bold text-indigo-600 uppercase tracking-wider">
+                  Explainable JD Skill Analysis
+                </span>
+                <h3 className="text-lg font-black text-slate-900 dark:text-white mt-0.5">
+                  {analysisModalData.applicant.student_name}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  {analysisModalData.applicant.college} • Applied for: <strong className="text-slate-700 dark:text-slate-300">{analysisModalData.applicant.title}</strong>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAnalysisModalData(null)}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {analysisModalData.loading ? (
+              <div className="py-12 text-center space-y-2">
+                <RefreshCw className="w-6 h-6 animate-spin text-indigo-600 mx-auto" />
+                <p className="text-xs text-slate-500">Evaluating candidate skills against job description...</p>
+              </div>
+            ) : analysisModalData.analysis ? (
+              <div className="space-y-4">
+                {/* Score & Verdict Banner */}
+                <div className={`p-4 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                  analysisModalData.analysis.verdict === 'STRONG_FIT' ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800' :
+                  analysisModalData.analysis.verdict === 'GOOD_FIT' ? 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-200 dark:border-indigo-800' :
+                  analysisModalData.analysis.verdict === 'PARTIAL_FIT' ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800' :
+                  'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800'
+                }`}>
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-slate-700 dark:text-slate-300">Deterministic Verdict:</span>
+                      <span className={`px-2.5 py-0.5 rounded-full text-xs font-black ${
+                        analysisModalData.analysis.verdict === 'STRONG_FIT' ? 'bg-emerald-600 text-white' :
+                        analysisModalData.analysis.verdict === 'GOOD_FIT' ? 'bg-indigo-600 text-white' :
+                        analysisModalData.analysis.verdict === 'PARTIAL_FIT' ? 'bg-amber-600 text-white' :
+                        'bg-rose-600 text-white'
+                      }`}>
+                        {analysisModalData.analysis.verdict.replace('_', ' ')}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-600 dark:text-slate-300">
+                      {analysisModalData.analysis.verdictExplanation || (analysisModalData.applicant as any).verdictExplanation || "Comprehensive deterministic match computed based on required vs verified proficiencies."}
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <span className="text-2xl font-black text-slate-900 dark:text-white">
+                      {analysisModalData.analysis.overallFit}%
+                    </span>
+                    <span className="text-[10px] block text-slate-500 uppercase font-semibold">JD Match Fit</span>
+                  </div>
+                </div>
+
+                {/* Coverage stats */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                    <span className="text-[10px] font-bold uppercase text-slate-500">Must-Have Skill Coverage</span>
+                    <div className="text-lg font-black text-slate-900 dark:text-white">
+                      {analysisModalData.analysis.mustHaveCoverage}%
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                    <span className="text-[10px] font-bold uppercase text-slate-500">Nice-to-Have Coverage</span>
+                    <div className="text-lg font-black text-slate-900 dark:text-white">
+                      {analysisModalData.analysis.niceToHaveCoverage}%
+                    </div>
+                  </div>
+                </div>
+
+                {/* Skill Breakdown Table */}
+                <div className="space-y-2">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400">
+                    Requirement Breakdown ({analysisModalData.analysis.skills.length} Skills Evaluated)
+                  </h4>
+                  <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800 max-h-60 overflow-y-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 text-[10px] font-bold text-slate-500 uppercase sticky top-0">
+                        <tr>
+                          <th className="py-2.5 px-3">Skill</th>
+                          <th className="py-2.5 px-2">Type</th>
+                          <th className="py-2.5 px-2 text-center">Required</th>
+                          <th className="py-2.5 px-2 text-center">Candidate</th>
+                          <th className="py-2.5 px-3 text-right">Match Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                        {analysisModalData.analysis.skills.map((sk) => (
+                          <tr key={sk.skill} className="hover:bg-slate-50/50 dark:hover:bg-slate-900/50">
+                            <td className="py-2.5 px-3">
+                              <span className="font-bold text-slate-800 dark:text-slate-200">{sk.skill}</span>
+                              {sk.matchedVia === 'RELATED' && (
+                                <span className="block text-[10px] text-indigo-600 dark:text-indigo-400">
+                                  via related: {sk.matchedSkill} (0.6x)
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-2">
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                sk.importance === 'MUST_HAVE'
+                                  ? 'bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300'
+                                  : 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
+                              }`}>
+                                {sk.importance === 'MUST_HAVE' ? 'MUST HAVE' : 'NICE TO HAVE'}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-2 text-center font-mono text-slate-600 dark:text-slate-400">
+                              &gt;={(sk.targetScore ?? sk.targetLevel)}%
+                            </td>
+                            <td className="py-2.5 px-2 text-center font-mono font-bold">
+                              {sk.studentScore !== null ? (
+                                <span className={sk.studentScore >= (sk.targetScore ?? sk.targetLevel) ? 'text-emerald-600' : 'text-amber-600'}>
+                                  {sk.studentScore}%
+                                </span>
+                              ) : (
+                                <span className="text-slate-400 font-normal italic">Not assessed</span>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3 text-right">
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold inline-block ${
+                                sk.status === 'MET' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' :
+                                sk.status === 'PARTIAL' ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300' :
+                                sk.status === 'NOT_ASSESSED' ? 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400' :
+                                'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
+                              }`}>
+                                {sk.status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Critical Gaps if any */}
+                {analysisModalData.analysis.criticalGaps && analysisModalData.analysis.criticalGaps.length > 0 && (
+                  <div className="p-3 rounded-xl bg-rose-50/70 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 text-xs space-y-1">
+                    <span className="font-bold text-rose-800 dark:text-rose-300 flex items-center gap-1.5">
+                      <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
+                      Critical Skill Gaps Identified:
+                    </span>
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {analysisModalData.analysis.criticalGaps.map((g) => (
+                        <span key={g.skill} className="px-2 py-0.5 rounded-md bg-white dark:bg-slate-900 border border-rose-200 text-rose-700 dark:text-rose-400 font-semibold text-[11px]">
+                          {g.skill} (Deficit: {g.gap} pts)
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            <div className="flex items-center justify-end pt-2 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setAnalysisModalData(null)}
+                className="px-5 py-2 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-xs font-bold hover:opacity-90 cursor-pointer"
+              >
+                Close Analysis
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

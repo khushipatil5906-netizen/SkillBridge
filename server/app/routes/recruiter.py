@@ -26,7 +26,8 @@ from app.ml.job_matcher import matcher
 from app.ml.demand_predictor import trend_predictor
 from app.ml.skill_intelligence import skill_intelligence, normalize_skill_name
 from app.routes.auth import require_roles
-from app.services.opportunity_lifecycle import parse_deadline, get_current_platform_date
+from app.services.opportunity_lifecycle import parse_deadline, get_current_platform_date, filter_active_opportunities
+from app.services.jd_skill_analysis import analyze_student_for_opportunity, derive_requirements_from_opportunity
 
 router = APIRouter(prefix="/api/recruiter", tags=["Recruiter"])
 
@@ -64,6 +65,8 @@ class PostJobRequest(BaseModel):
     description: str
     eligible_streams: Optional[List[str]] = ["Computer Engineering", "Information Technology"]
     eligible_years: Optional[List[str]] = ["3rd Year", "4th Year"]
+    skill_requirements: Optional[List[Dict[str, Any]]] = None
+    skillRequirements: Optional[List[Dict[str, Any]]] = None
 
 def resolve_current_recruiter(email: Optional[str] = None, rec_id: Optional[str] = None) -> Dict[str, Any]:
     """Resolves active recruiter from RECRUITERS or falls back to seed profile."""
@@ -192,6 +195,11 @@ def post_job(
         "posted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     }
 
+    reqs = req.skillRequirements or req.skill_requirements
+    if not reqs:
+        reqs = derive_requirements_from_opportunity(new_opp)
+    new_opp["skillRequirements"] = reqs
+
     # Add to central OPPORTUNITIES store
     OPPORTUNITIES.insert(0, new_opp)
     recruiter["active_listings"] = recruiter.get("active_listings", 0) + 1
@@ -304,6 +312,21 @@ def get_applicants(
             evidence_strength = "MODERATE"
             explanation = "Verified talent match."
 
+        jd_score = a.get("jdFitScore")
+        jd_verdict = a.get("jdFitVerdict")
+        jd_summary = a.get("jdFitSummary")
+        jd_computed_at = a.get("jdFitComputedAt")
+        if jd_score is None and student and opp:
+            jd_res = analyze_student_for_opportunity(student, opp)
+            jd_score = jd_res["overallFit"]
+            jd_verdict = jd_res["verdict"]
+            jd_summary = jd_res["summary"]
+            jd_computed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            a["jdFitScore"] = jd_score
+            a["jdFitVerdict"] = jd_verdict
+            a["jdFitSummary"] = jd_summary
+            a["jdFitComputedAt"] = jd_computed_at
+
         enriched_applicants.append({
             "id": a["id"],
             "student_id": a.get("student_id"),
@@ -324,7 +347,11 @@ def get_applicants(
             "explanation": explanation,
             "status": a.get("status", "Applied"),
             "applied_at": a.get("applied_at", "2026-10-01T10:30:00Z"),
-            "status_history": a.get("status_history", [])
+            "status_history": a.get("status_history", []),
+            "jdFitScore": jd_score,
+            "jdFitVerdict": jd_verdict,
+            "jdFitSummary": jd_summary,
+            "jdFitComputedAt": jd_computed_at
         })
 
     return {
@@ -1045,5 +1072,231 @@ def express_project_sponsorship_interest(
         "message": f"Sponsorship / Collaboration request submitted to {project.get('academician_name', 'the Academician')}.",
         "interest": interest_entry
     }
+
+@router.get("/opportunities/{opportunity_id}/applicants-fit")
+def get_opportunity_applicants_fit(
+    opportunity_id: str,
+    sort: Optional[str] = Query("fit", description="Sort by: 'fit', 'date', 'name', 'match'"),
+    verdict: Optional[str] = Query(None, description="Filter by verdict: STRONG_FIT, GOOD_FIT, PARTIAL_FIT, WEAK_FIT, ALL"),
+    min_fit: Optional[int] = Query(None, description="Filter by minimum JD fit score"),
+    email: Optional[str] = Query(None),
+    auth_check = Depends(require_roles(["recruiter", "admin"]))
+):
+    """
+    Returns applicants for a specific opportunity with explainable JD Fit metrics.
+    Enforces incognito candidate privacy masking and deterministic sorting/filtering.
+    """
+    opp = next((o for o in OPPORTUNITIES if o.get("id") == opportunity_id or o.get("opportunity_id") == opportunity_id), None)
+    if not opp:
+        raise HTTPException(status_code=404, detail="Opportunity not found.")
+
+    recruiter = resolve_current_recruiter(email)
+    recruiter_company = recruiter.get("company", opp.get("company", ""))
+
+    target_apps = [a for a in APPLICATIONS if a.get("opportunity_id") == opportunity_id]
+
+    items = []
+    for a in target_apps:
+        student = next((s for s in STUDENTS if s["id"] == a.get("student_id")), None)
+        if not student:
+            continue
+
+        student_id = student["id"]
+        vis_setting = TALENT_VISIBILITY_SETTINGS.get(student_id, {}) if isinstance(TALENT_VISIBILITY_SETTINGS, dict) else {}
+        is_incognito = vis_setting.get("incognito_mode", False) if isinstance(vis_setting, dict) else False
+        has_consent = has_identity_reveal_consent(student_id, recruiter_company) if is_incognito else True
+
+        if is_incognito and not has_consent:
+            candidate_name = f"Candidate #{student_id[-4:].upper()}"
+            candidate_email = "Verified Candidate (Private)"
+            candidate_college = "Top-Tier Accredited University"
+            candidate_avatar = ""
+            mask_active = True
+        else:
+            candidate_name = student.get("name", "Student")
+            candidate_email = student.get("email", "")
+            candidate_college = student.get("college", "JSPM RSCOE, Pune")
+            candidate_avatar = student.get("avatar", "")
+            mask_active = False
+
+        analysis = analyze_student_for_opportunity(student, opp)
+
+        # Sync snapshot
+        a["jdFitScore"] = analysis["overallFit"]
+        a["jdFitVerdict"] = analysis["verdict"]
+        a["jdFitSummary"] = analysis["summary"]
+        a["jdFitComputedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+        if verdict and verdict.upper() != "ALL":
+            if analysis["verdict"].upper() != verdict.upper():
+                continue
+
+        if min_fit is not None:
+            if analysis["overallFit"] < min_fit:
+                continue
+
+        items.append({
+            "applicationId": a["id"],
+            "studentId": student_id,
+            "studentName": candidate_name,
+            "studentEmail": candidate_email,
+            "college": candidate_college,
+            "department": student.get("department", "Computer Engineering"),
+            "year": student.get("year", "3rd Year"),
+            "cgpa": student.get("cgpa", 8.5),
+            "avatar": candidate_avatar,
+            "isIncognito": mask_active,
+            "status": a.get("status", "Applied"),
+            "appliedAt": a.get("applied_at", ""),
+            "matchPercentage": a.get("match_percentage", 85),
+            "jdFitScore": analysis["overallFit"],
+            "jdFitVerdict": analysis["verdict"],
+            "jdFitVerdictExplanation": analysis["verdictExplanation"],
+            "jdFitSummary": analysis["summary"],
+            "criticalGaps": analysis.get("criticalGaps", []),
+            "skills": analysis.get("skills", [])
+        })
+
+    if sort == "fit":
+        items.sort(key=lambda x: x["jdFitScore"], reverse=True)
+    elif sort == "date":
+        items.sort(key=lambda x: x["appliedAt"], reverse=True)
+    elif sort == "name":
+        items.sort(key=lambda x: x["studentName"].lower())
+    elif sort == "match":
+        items.sort(key=lambda x: x["matchPercentage"], reverse=True)
+
+    return {
+        "status": "success",
+        "opportunityId": opportunity_id,
+        "opportunityTitle": opp.get("title"),
+        "company": opp.get("company"),
+        "total": len(items),
+        "applicants": items
+    }
+
+@router.get("/opportunities/{opportunity_id}/applicants/{student_id}/skill-analysis")
+def get_applicant_skill_analysis(
+    opportunity_id: str,
+    student_id: str,
+    email: Optional[str] = Query(None),
+    auth_check = Depends(require_roles(["recruiter", "admin"]))
+):
+    """
+    Returns full explainable JD-skill breakdown for a candidate against an opportunity.
+    Applies privacy masking if candidate is in incognito mode.
+    """
+    opp = next((o for o in OPPORTUNITIES if o.get("id") == opportunity_id or o.get("opportunity_id") == opportunity_id), None)
+    if not opp:
+        raise HTTPException(status_code=404, detail="Opportunity not found.")
+
+    student = next((s for s in STUDENTS if s["id"] == student_id), None)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found.")
+
+    recruiter = resolve_current_recruiter(email)
+    recruiter_company = recruiter.get("company", opp.get("company", ""))
+
+    vis_setting = TALENT_VISIBILITY_SETTINGS.get(student_id, {}) if isinstance(TALENT_VISIBILITY_SETTINGS, dict) else {}
+    is_incognito = vis_setting.get("incognito_mode", False) if isinstance(vis_setting, dict) else False
+    has_consent = has_identity_reveal_consent(student_id, recruiter_company) if is_incognito else True
+
+    analysis = analyze_student_for_opportunity(student, opp)
+
+    if is_incognito and not has_consent:
+        candidate_info = {
+            "id": student_id,
+            "name": f"Candidate #{student_id[-4:].upper()}",
+            "email": "Verified Candidate (Private)",
+            "college": "Top-Tier Accredited University",
+            "department": student.get("department", "Computer Engineering"),
+            "year": student.get("year", "3rd Year"),
+            "cgpa": student.get("cgpa", 8.5),
+            "isIncognito": True
+        }
+    else:
+        candidate_info = {
+            "id": student_id,
+            "name": student.get("name"),
+            "email": student.get("email"),
+            "college": student.get("college"),
+            "department": student.get("department", "Computer Engineering"),
+            "year": student.get("year", "3rd Year"),
+            "cgpa": student.get("cgpa", 8.5),
+            "isIncognito": False
+        }
+
+    return {
+        "status": "success",
+        "opportunity": {
+            "id": opp["id"],
+            "title": opp.get("title"),
+            "company": opp.get("company")
+        },
+        "candidate": candidate_info,
+        "analysis": analysis
+    }
+
+@router.get("/opportunities/{opportunity_id}/fit-summary")
+def get_opportunity_fit_summary(
+    opportunity_id: str,
+    email: Optional[str] = Query(None),
+    auth_check = Depends(require_roles(["recruiter", "admin"]))
+):
+    """
+    Returns aggregate fit distribution and most common missing skills across applicants for this opportunity.
+    """
+    opp = next((o for o in OPPORTUNITIES if o.get("id") == opportunity_id or o.get("opportunity_id") == opportunity_id), None)
+    if not opp:
+        raise HTTPException(status_code=404, detail="Opportunity not found.")
+
+    target_apps = [a for a in APPLICATIONS if a.get("opportunity_id") == opportunity_id]
+
+    strong_count = 0
+    good_count = 0
+    partial_count = 0
+    weak_count = 0
+    scores = []
+    missing_skill_counter: Dict[str, int] = {}
+
+    for a in target_apps:
+        student = next((s for s in STUDENTS if s["id"] == a.get("student_id")), None)
+        if not student:
+            continue
+        analysis = analyze_student_for_opportunity(student, opp)
+        verdict = analysis.get("verdict")
+        score = analysis.get("overallFit", 0)
+        scores.append(score)
+
+        if verdict == "STRONG_FIT": strong_count += 1
+        elif verdict == "GOOD_FIT": good_count += 1
+        elif verdict == "PARTIAL_FIT": partial_count += 1
+        elif verdict == "WEAK_FIT": weak_count += 1
+
+        for gap in analysis.get("criticalGaps", []):
+            sk = gap.get("skill")
+            if sk:
+                missing_skill_counter[sk] = missing_skill_counter.get(sk, 0) + 1
+
+    avg_score = round(sum(scores) / len(scores), 1) if scores else 0.0
+    top_missing = [
+        {"skill": k, "count": v}
+        for k, v in sorted(missing_skill_counter.items(), key=lambda x: x[1], reverse=True)
+    ]
+
+    return {
+        "status": "success",
+        "opportunityId": opportunity_id,
+        "totalApplicants": len(target_apps),
+        "avgFitScore": avg_score,
+        "verdictDistribution": {
+            "STRONG_FIT": strong_count,
+            "GOOD_FIT": good_count,
+            "PARTIAL_FIT": partial_count,
+            "WEAK_FIT": weak_count
+        },
+        "topMissingSkills": top_missing
+    }
+
 
 

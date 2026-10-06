@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import uuid
@@ -7,7 +7,39 @@ import math
 from app.ml.skill_verifier import verifier
 from app.ml.job_matcher import matcher
 from app.ml.credential_verifier import credential_verifier
-from app.data.seed_data import STUDENTS, OPPORTUNITIES, COURSE_CATALOG
+from app.data.seed_data import STUDENTS, OPPORTUNITIES, COURSE_CATALOG, APPLICATIONS, log_audit_trail
+from app.routes.auth import require_roles
+from app.services.jd_skill_analysis import analyze_student_for_opportunity
+from app.services.opportunity_lifecycle import filter_active_opportunities
+
+def _recompute_student_application_snapshots(student_id: str, student_skills: Dict[str, Any]):
+    """
+    Non-blocking additive hook: recomputes stored JD fit snapshots for a student's open applications
+    when they complete a new assessment.
+    """
+    try:
+        verdict_order = {"NEEDS_WORK": 0, "PARTIAL_FIT": 1, "GOOD_FIT": 2, "STRONG_FIT": 3}
+        for app in APPLICATIONS:
+            if app.get("student_id") == student_id:
+                opp = next((o for o in OPPORTUNITIES if o["id"] == app.get("opportunity_id")), None)
+                if opp:
+                    old_verdict = app.get("jdFitVerdict")
+                    recomputed = analyze_student_for_opportunity(student_skills, opportunity=opp)
+                    new_verdict = recomputed["verdict"]
+                    app["jdFitScore"] = recomputed["overallFit"]
+                    app["jdFitVerdict"] = new_verdict
+                    app["jdFitSummary"] = recomputed["summary"]
+                    app["jdFitComputedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    # Notification trigger: if fit lifted to higher verdict
+                    if old_verdict and verdict_order.get(new_verdict, 0) > verdict_order.get(old_verdict, 0):
+                        log_audit_trail(
+                            actor=app.get("student_name", "Student"),
+                            action="JD_FIT_VERDICT_LIFTED",
+                            target=f"{app.get('company')} - {app.get('title')}",
+                            details=f"Fit verdict improved from {old_verdict} to {new_verdict} ({recomputed['overallFit']}%) following new assessment completion."
+                        )
+    except Exception as e:
+        print(f"[JD Fit Recompute Warning] Non-blocking assessment snapshot recompute skipped: {e}")
 
 router = APIRouter(prefix="/api/assessments", tags=["Assessments & Verification"])
 
@@ -1802,6 +1834,9 @@ def submit_multisection_assessment(sub: MultiSectionSubmission):
     # Recalculate AI opportunity matches using existing job matcher
     ranked_opps = matcher.rank_opportunities_for_student(student_for_matching, OPPORTUNITIES)
 
+    # Step 4.E Additive Snapshot Recompute Hook (Non-blocking)
+    _recompute_student_application_snapshots(sub.student_id, student_for_matching.get("skills", {}))
+
     # Format result for UI donut chart and text displays
     chart_palette = ["#4f46e5", "#06b6d4", "#10b981", "#f59e0b", "#ec4899", "#8b5cf6", "#14b8a6"]
     donut_chart_data = []
@@ -1952,6 +1987,9 @@ def submit_assessment(sub: AssessmentSubmission):
         "verified": True
     }
     
+    # Step 4.E Additive Snapshot Recompute Hook (Non-blocking)
+    _recompute_student_application_snapshots(sub.student_id, student["skills"])
+    
     top_opp = OPPORTUNITIES[0]
     updated_match = matcher.match_student_to_opportunity(student["skills"], top_opp)
     
@@ -2011,4 +2049,51 @@ def verify_qr(req: VerifyQRRequest):
         "reputable_issuer": result.get("is_authentic", False),
         "confidence_pct": result.get("confidence_pct", 98.4),
         "verification": result
+    }
+
+@router.get("/jd-analysis")
+def get_student_jd_analysis(
+    student_id: str = Query("std_1"),
+    auth_check = Depends(require_roles(["student", "recruiter", "academician", "admin"]))
+):
+    """
+    Step 4.A: Returns JD-based skill analysis for every available opportunity for the logged-in student,
+    sorted by overallFit descending.
+    Strictly uses verified skills data; never uses personal PII attributes.
+    """
+    student = next((s for s in STUDENTS if s["id"] == student_id), STUDENTS[0])
+    active_opps = filter_active_opportunities(OPPORTUNITIES, include_expired=False)
+
+    analyses = []
+    for opp in active_opps:
+        analysis = analyze_student_for_opportunity(student.get("skills", {}), opportunity=opp)
+        analyses.append({
+            "opportunity_id": opp.get("id"),
+            "opportunityId": opp.get("id"),
+            "title": opp.get("title"),
+            "company": opp.get("company"),
+            "logo_text": opp.get("logo_text", "COMPANY"),
+            "location": opp.get("location"),
+            "stipend": opp.get("stipend"),
+            "type": opp.get("type"),
+            "deadline": opp.get("deadline"),
+            "color_theme": opp.get("color_theme", "indigo"),
+            "overallFit": analysis["overallFit"],
+            "verdict": analysis["verdict"],
+            "mustHaveCoverage": analysis["mustHaveCoverage"],
+            "niceToHaveCoverage": analysis["niceToHaveCoverage"],
+            "skills": analysis["skills"],
+            "topGaps": analysis["topGaps"],
+            "summary": analysis["summary"],
+            "explanation": analysis["explanation"]
+        })
+
+    analyses.sort(key=lambda x: x["overallFit"], reverse=True)
+
+    return {
+        "status": "success",
+        "student_id": student_id,
+        "total": len(analyses),
+        "analyses": analyses,
+        "opportunities": analyses
     }

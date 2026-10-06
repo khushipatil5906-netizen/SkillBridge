@@ -24,6 +24,8 @@ from app.data.seed_data import (
 from app.ml.demand_predictor import trend_predictor
 from app.ml.skill_intelligence import skill_intelligence, normalize_skill_name
 from app.routes.auth import require_roles
+from app.services.opportunity_lifecycle import filter_active_opportunities
+from app.services.jd_skill_analysis import analyze_student_for_opportunity
 
 router = APIRouter(prefix="/api/academician", tags=["Academician"])
 
@@ -1066,5 +1068,117 @@ def get_academician_collaboration_analytics(
         "top_project_skills": top_project_skills[:5],
         "projects": my_projects
     }
+
+@router.get("/role-gaps")
+def get_cohort_role_gaps(
+    year: Optional[str] = Query(None, description="Filter by student year: '2nd Year', '3rd Year', '4th Year', 'All'"),
+    opportunity_id: Optional[str] = Query(None, description="Filter for a specific opportunity ID"),
+    email: Optional[str] = Query(None),
+    acad_id: Optional[str] = Query(None),
+    auth_check = Depends(require_roles(["academician", "admin"]))
+):
+    """
+    Analyzes student cohort skill readiness and gaps against active industry opportunities.
+    Computes average fit scores, verdict distributions, and the most critical missing skills per role.
+    """
+    academician = resolve_current_academician(email, acad_id)
+    cohort = get_authorized_cohort_students(academician)
+    if year and year != "All":
+        cohort = [s for s in cohort if s.get("year", "").lower() == year.lower()]
+
+    active_opps = filter_active_opportunities(OPPORTUNITIES, include_expired=False)
+    if opportunity_id:
+        active_opps = [o for o in active_opps if o.get("id") == opportunity_id or o.get("opportunity_id") == opportunity_id]
+
+    roles_summary = []
+    global_missing_counts: Dict[str, Dict[str, Any]] = {}
+
+    for opp in active_opps:
+        fit_scores = []
+        verdict_counts = {"STRONG_FIT": 0, "GOOD_FIT": 0, "PARTIAL_FIT": 0, "WEAK_FIT": 0}
+        opp_missing_counts: Dict[str, int] = {}
+
+        for student in cohort:
+            analysis = analyze_student_for_opportunity(student, opp)
+            fit_scores.append(analysis["overallFit"])
+            v = analysis["verdict"]
+            if v in verdict_counts:
+                verdict_counts[v] += 1
+
+            for gap in analysis.get("criticalGaps", []):
+                sk = gap.get("skill")
+                if sk:
+                    opp_missing_counts[sk] = opp_missing_counts.get(sk, 0) + 1
+                    if sk not in global_missing_counts:
+                        global_missing_counts[sk] = {
+                            "skill": sk,
+                            "importance": gap.get("importance", "MUST_HAVE"),
+                            "affectedStudents": set(),
+                            "rolesCount": 0
+                        }
+                    global_missing_counts[sk]["affectedStudents"].add(student["id"])
+
+        for sk in opp_missing_counts.keys():
+            if sk in global_missing_counts:
+                global_missing_counts[sk]["rolesCount"] += 1
+
+        avg_fit = round(sum(fit_scores) / len(fit_scores), 1) if fit_scores else 0.0
+
+        top_missing = []
+        for sk, count in sorted(opp_missing_counts.items(), key=lambda x: x[1], reverse=True)[:5]:
+            pct = round((count / max(1, len(cohort))) * 100, 1)
+            matched_course = None
+            for cat_skill, courses in COURSE_CATALOG.items():
+                if sk.lower() in cat_skill.lower() and courses:
+                    matched_course = courses[0]
+                    break
+                for c in courses:
+                    if sk.lower() in c.get("title", "").lower() or any(sk.lower() in s.lower() for s in c.get("skills_covered", [])):
+                        matched_course = c
+                        break
+                if matched_course:
+                    break
+            top_missing.append({
+                "skill": sk,
+                "missingCount": count,
+                "percentageOfCohort": pct,
+                "recommendedCourse": matched_course.get("title") if matched_course else f"{sk} Mastery Lab",
+                "recommendedCourseId": matched_course.get("id") if matched_course else None,
+                "provider": matched_course.get("provider", "SkillBridge Academy") if matched_course else "SkillBridge Academy"
+            })
+
+        roles_summary.append({
+            "opportunityId": opp["id"],
+            "title": opp.get("title"),
+            "company": opp.get("company"),
+            "stipend": opp.get("stipend"),
+            "location": opp.get("location"),
+            "deadline": opp.get("deadline"),
+            "avgFitScore": avg_fit,
+            "verdictDistribution": verdict_counts,
+            "topMissingSkills": top_missing
+        })
+
+    roles_summary.sort(key=lambda r: r["avgFitScore"], reverse=True)
+
+    in_demand_gaps = []
+    for sk, data in sorted(global_missing_counts.items(), key=lambda x: len(x[1]["affectedStudents"]), reverse=True)[:8]:
+        affected_count = len(data["affectedStudents"])
+        in_demand_gaps.append({
+            "skill": sk,
+            "importance": data["importance"],
+            "affectedStudentsCount": affected_count,
+            "affectedPercentage": round((affected_count / max(1, len(cohort))) * 100, 1),
+            "demandingRolesCount": data["rolesCount"]
+        })
+
+    return {
+        "status": "success",
+        "cohortSize": len(cohort),
+        "opportunitiesAnalyzed": len(active_opps),
+        "roles": roles_summary,
+        "mostInDemandGaps": in_demand_gaps
+    }
+
 
 

@@ -32,6 +32,7 @@ import {
 import { getSkillQuestions, AssessmentQuestion } from '../data/skillQuestions';
 import { apiService } from '../services/api';
 import { initFaceDetector, detectFaces } from '../services/faceDetection';
+import { RoleSpecificSkillAnalysis } from '../components/RoleSpecificSkillAnalysis';
 
 interface SkillVerificationViewProps {
   studentId?: string;
@@ -1523,6 +1524,18 @@ export const SkillVerificationView: React.FC<SkillVerificationViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Role-Specific Skill Analysis Accordion Section strictly below generic scores/passport */}
+      <RoleSpecificSkillAnalysis
+        studentId={studentId}
+        onSelectSkillForVerification={(skillName: string) => {
+          setSelectedSkill(skillName);
+          setActiveMainTab('assess');
+          setExamState('configure');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }}
+        onNavigateTab={onNavigateTab}
+      />
     </div>
   );
 };

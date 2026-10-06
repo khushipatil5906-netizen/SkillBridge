@@ -27,6 +27,7 @@ export interface StudentProfile {
 }
 
 export interface MatchedOpportunity {
+  id?: string;
   opportunity_id: string;
   title: string;
   company: string;
@@ -49,6 +50,68 @@ export interface MatchedOpportunity {
   source_type?: 'ATS_DIRECT' | 'CAMPUS_TPO' | 'SCRAPED_EXTERNAL' | string;
   verified_source_badge?: string;
   risk_level?: 'LOW' | 'MEDIUM' | 'HIGH';
+  // Step 2 & 4 Additive JD Fit Fields
+  skillRequirements?: SkillRequirement[];
+  skill_requirements?: SkillRequirement[];
+  jdFit?: {
+    overallFit: number;
+    verdict: JDFitVerdict;
+    summary?: JDFitSummary;
+  };
+  jd_fit?: {
+    overallFit: number;
+    verdict: JDFitVerdict;
+    summary?: JDFitSummary;
+  };
+}
+
+export type RequirementImportance = 'MUST_HAVE' | 'NICE_TO_HAVE';
+export type JDFitVerdict = 'STRONG_FIT' | 'GOOD_FIT' | 'PARTIAL_FIT' | 'NEEDS_WORK';
+
+export interface SkillRequirement {
+  skill: string;
+  importance: RequirementImportance;
+  targetLevel?: number;
+  targetScore?: number;
+  min_score?: number;
+  min_level?: string;
+  score?: number;
+}
+
+export interface JDFitSkillDetail {
+  skill: string;
+  importance: RequirementImportance;
+  targetLevel: number;
+  targetScore?: number;
+  min_score?: number;
+  studentScore: number | null;
+  effectiveScore?: number | null;
+  matchedVia: 'EXACT' | 'ALIAS' | 'RELATED' | 'NONE';
+  matchedSkill?: string | null;
+  coverage: number;
+  status: 'MET' | 'PARTIAL' | 'GAP' | 'NOT_ASSESSED';
+  gap: number;
+}
+
+export interface JDFitSummary {
+  mustHaveCoverage: number;
+  niceToHaveCoverage: number;
+  topGaps: string[];
+  metCount: number;
+  totalCount: number;
+}
+
+export interface JDFitAnalysisResult {
+  overallFit: number;
+  mustHaveCoverage: number;
+  niceToHaveCoverage: number;
+  verdict: JDFitVerdict;
+  verdictExplanation?: string;
+  skills: JDFitSkillDetail[];
+  topGaps: JDFitSkillDetail[];
+  criticalGaps?: JDFitSkillDetail[];
+  summary?: JDFitSummary;
+  explanation: string[];
 }
 
 export interface ChartSeries {
@@ -403,6 +466,15 @@ export interface RecruiterApplicant {
   status: string;
   applied_at: string;
   status_history?: Array<{ status: string; updated_at: string; note: string }>;
+  // Step 2 & 4 Additive Cached Snapshot Fields
+  jdFitScore?: number | null;
+  jdFitVerdict?: JDFitVerdict | string | null;
+  jdFitSummary?: JDFitSummary | null;
+  jdFitComputedAt?: string | null;
+  criticalGaps?: string[];
+  critical_gaps?: string[];
+  verdictExplanation?: string;
+  verdict_explanation?: string;
 }
 
 export interface AdminUser {
@@ -447,6 +519,8 @@ export interface PostJobPayload {
   description: string;
   eligible_streams?: string[];
   eligible_years?: string[];
+  skill_requirements?: SkillRequirement[];
+  skillRequirements?: SkillRequirement[];
 }
 
 // ====================================================

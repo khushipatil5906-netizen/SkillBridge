@@ -27,7 +27,8 @@ from app.ml.demand_predictor import trend_predictor
 from app.ml.skill_extractor import skill_extractor
 from app.ml.skill_intelligence import skill_intelligence, normalize_skill_name
 from app.models.linkedin import validate_linkedin_url, LINKEDIN_CONNECTIONS
-from app.services.opportunity_lifecycle import validate_can_apply, evaluate_opportunity_lifecycle
+from app.services.opportunity_lifecycle import validate_can_apply, evaluate_opportunity_lifecycle, filter_active_opportunities
+from app.services.jd_skill_analysis import analyze_student_for_opportunity
 
 router = APIRouter(prefix="/api/student", tags=["Student"])
 
@@ -122,6 +123,19 @@ def get_student_dashboard(student_id: str = Query("std_1")):
     
     # 1. Match opportunities using ML Model 2 (Pillar 2: Strictly active non-expired drives)
     matched_opps = matcher.rank_opportunities_for_student(student, OPPORTUNITIES, include_expired=False)
+    for opp_res in matched_opps:
+        opp_obj = next((o for o in OPPORTUNITIES if o.get("id") == opp_res.get("id")), None)
+        if opp_obj:
+            jd_res = analyze_student_for_opportunity(student, opp_obj)
+            opp_res["jdFit"] = {
+                "score": jd_res["overallFit"],
+                "verdict": jd_res["verdict"],
+                "verdictExplanation": jd_res.get("verdictExplanation", " ".join(jd_res.get("explanation", []))),
+                "summary": jd_res["summary"],
+                "criticalGapsCount": len(jd_res.get("criticalGaps", jd_res.get("topGaps", []))),
+                "skillsAnalyzed": len(jd_res.get("skills", [])),
+            }
+            opp_res["jd_fit"] = opp_res["jdFit"]
     
     # 2. Get Hero Chart data using ML Model 3
     chart_data = trend_predictor.get_trend_chart_data(role="student")
@@ -169,7 +183,21 @@ def get_opportunities(
     If include_expired=True, returns all drives including past read-only archives.
     """
     student = next((s for s in STUDENTS if s["id"] == student_id), STUDENTS[0])
-    return matcher.rank_opportunities_for_student(student, OPPORTUNITIES, include_expired=include_expired)
+    ranked = matcher.rank_opportunities_for_student(student, OPPORTUNITIES, include_expired=include_expired)
+    for opp_res in ranked:
+        opp_obj = next((o for o in OPPORTUNITIES if o.get("id") == opp_res.get("id")), None)
+        if opp_obj:
+            jd_res = analyze_student_for_opportunity(student, opp_obj)
+            opp_res["jdFit"] = {
+                "score": jd_res["overallFit"],
+                "verdict": jd_res["verdict"],
+                "verdictExplanation": jd_res.get("verdictExplanation", " ".join(jd_res.get("explanation", []))),
+                "summary": jd_res["summary"],
+                "criticalGapsCount": len(jd_res.get("criticalGaps", jd_res.get("topGaps", []))),
+                "skillsAnalyzed": len(jd_res.get("skills", [])),
+            }
+            opp_res["jd_fit"] = opp_res["jdFit"]
+    return ranked
 
 @router.post("/registration")
 def submit_student_registration(req: StudentRegistrationRequest):
@@ -451,6 +479,10 @@ def apply_to_opportunity(req: ApplyOpportunityRequest):
     # Calculate match percentage
     match_res = matcher.match_student_to_opportunity(student.get("skills", {}), opp)
 
+    # Compute JD Fit snapshot
+    jd_analysis = analyze_student_for_opportunity(student, opp)
+    now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
     app_id = f"app_{uuid.uuid4().hex[:8]}"
     new_application = {
         "id": app_id,
@@ -464,10 +496,28 @@ def apply_to_opportunity(req: ApplyOpportunityRequest):
         "match_percentage": match_res["match_percentage"],
         "matched_skills": match_res["matched_skills"],
         "status": "Applied",
-        "applied_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        "applied_at": now_iso,
+        "jdFitScore": jd_analysis["overallFit"],
+        "jdFitVerdict": jd_analysis["verdict"],
+        "jdFitSummary": jd_analysis["summary"],
+        "jdFitComputedAt": now_iso
     }
 
     APPLICATIONS.append(new_application)
+
+    if jd_analysis.get("verdict") == "STRONG_FIT":
+        try:
+            log_audit_trail(
+                actor=student.get("email", req.student_id),
+                role="student",
+                action="JD_STRONG_FIT_APPLICATION",
+                entity="Application",
+                entity_id=app_id,
+                old_value=None,
+                new_value=f"Strong fit ({jd_analysis['overallFit']}%) application submitted for {opp.get('title')} at {opp.get('company')}"
+            )
+        except Exception:
+            pass
 
     return {
         "status": "success",
@@ -1010,5 +1060,39 @@ def get_student_recommended_projects(student_id: str = Query("std_1")):
         "total": len(recommended),
         "projects": recommended
     }
+
+@router.get("/jd-analysis")
+def get_student_jd_analysis(
+    student_id: str = Query("std_1"),
+    opportunity_id: Optional[str] = Query(None)
+):
+    """
+    Returns JD-Based Skill Analysis for the student against active opportunities.
+    Pure explainable logic with deterministic scoring and critical gap highlighting.
+    """
+    student = next((s for s in STUDENTS if s["id"] == student_id), None)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found.")
+
+    active_opps = filter_active_opportunities(OPPORTUNITIES, include_expired=False)
+
+    if opportunity_id:
+        target_opp = next((o for o in active_opps if o["id"] == opportunity_id), None)
+        if not target_opp:
+            target_opp = next((o for o in OPPORTUNITIES if o["id"] == opportunity_id), None)
+        if not target_opp:
+            raise HTTPException(status_code=404, detail="Opportunity not found.")
+        return analyze_student_for_opportunity(student, target_opp)
+
+    analyses = [analyze_student_for_opportunity(student, opp) for opp in active_opps]
+    analyses.sort(key=lambda x: x["overallFit"], reverse=True)
+    return {
+        "status": "success",
+        "student_id": student["id"],
+        "student_name": student["name"],
+        "total_active_opportunities": len(analyses),
+        "analyses": analyses
+    }
+
 
 

@@ -274,6 +274,14 @@ OPPORTUNITIES = [
         "type": "Internship to PPO",
         "required_skills": ["Python", "React", "FastAPI", "Machine Learning"],
         "good_to_have": ["Docker", "PostgreSQL"],
+        "skillRequirements": [
+            {"skill": "Python", "importance": "MUST_HAVE", "targetLevel": 80},
+            {"skill": "React", "importance": "MUST_HAVE", "targetLevel": 80},
+            {"skill": "FastAPI", "importance": "MUST_HAVE", "targetLevel": 75},
+            {"skill": "Machine Learning", "importance": "MUST_HAVE", "targetLevel": 75},
+            {"skill": "Docker", "importance": "NICE_TO_HAVE", "targetLevel": 65},
+            {"skill": "PostgreSQL", "importance": "NICE_TO_HAVE", "targetLevel": 70}
+        ],
         "min_verified_score": 80,
         "openings": 4,
         "deadline": "2026-10-30",
@@ -291,6 +299,13 @@ OPPORTUNITIES = [
         "type": "Full-Time Placement",
         "required_skills": ["Python", "Machine Learning", "PyTorch", "FastAPI"],
         "good_to_have": ["Docker", "Data Structures"],
+        "skillRequirements": [
+            {"skill": "Python", "importance": "MUST_HAVE", "targetLevel": 85},
+            {"skill": "Machine Learning", "importance": "MUST_HAVE", "targetLevel": 80},
+            {"skill": "PyTorch", "importance": "MUST_HAVE", "targetLevel": 75},
+            {"skill": "FastAPI", "importance": "NICE_TO_HAVE", "targetLevel": 70},
+            {"skill": "Docker", "importance": "NICE_TO_HAVE", "targetLevel": 65}
+        ],
         "min_verified_score": 82,
         "openings": 2,
         "deadline": "2026-11-15",
@@ -308,6 +323,13 @@ OPPORTUNITIES = [
         "type": "Internship",
         "required_skills": ["React", "TypeScript", "Tailwind CSS"],
         "good_to_have": ["UI/UX Design", "Node.js"],
+        "skillRequirements": [
+            {"skill": "React", "importance": "MUST_HAVE", "targetLevel": 80},
+            {"skill": "TypeScript", "importance": "MUST_HAVE", "targetLevel": 75},
+            {"skill": "Tailwind CSS", "importance": "MUST_HAVE", "targetLevel": 70},
+            {"skill": "UI/UX Design", "importance": "NICE_TO_HAVE", "targetLevel": 70},
+            {"skill": "Node.js", "importance": "NICE_TO_HAVE", "targetLevel": 65}
+        ],
         "min_verified_score": 78,
         "openings": 5,
         "deadline": "2026-11-05",
@@ -325,6 +347,13 @@ OPPORTUNITIES = [
         "type": "Placement Track",
         "required_skills": ["Docker", "Cloud Computing", "Python", "SQL"],
         "good_to_have": ["Kubernetes", "Linux"],
+        "skillRequirements": [
+            {"skill": "Docker", "importance": "MUST_HAVE", "targetLevel": 75},
+            {"skill": "Cloud Computing", "importance": "MUST_HAVE", "targetLevel": 75},
+            {"skill": "Python", "importance": "MUST_HAVE", "targetLevel": 70},
+            {"skill": "SQL", "importance": "NICE_TO_HAVE", "targetLevel": 65},
+            {"skill": "Kubernetes", "importance": "NICE_TO_HAVE", "targetLevel": 65}
+        ],
         "min_verified_score": 75,
         "openings": 3,
         "deadline": "2026-10-28",
@@ -453,7 +482,74 @@ APPLICATIONS = [
         "status_history": [
             {"status": "Applied", "updated_at": "2026-10-01T10:30:00Z", "note": "Direct placement pipeline"},
             {"status": "Shortlisted", "updated_at": "2026-10-02T14:00:00Z", "note": "Verified React & Python scores meet benchmark cutoff"}
-        ]
+        ],
+        # Additive Cached JD Fit Snapshot (Step 2 Migration)
+        "jdFitScore": 96,
+        "jdFitVerdict": "STRONG_FIT",
+        "jdFitSummary": {
+            "mustHaveCoverage": 100.0,
+            "niceToHaveCoverage": 100.0,
+            "topGaps": [],
+            "metCount": 6,
+            "totalCount": 6
+        },
+        "jdFitComputedAt": "2026-10-02T14:00:00Z"
+    },
+    {
+        "id": "app_2",
+        "student_id": "std_1",
+        "student_name": "Dhruv Patil",
+        "student_email": "dhruv.patil@rscoe.edu.in",
+        "college": "JSPM RSCOE, Pune",
+        "institution_id": "inst_rscoe",
+        "department": "Computer Engineering",
+        "department_id": "dept_comp",
+        "opportunity_id": "opp_2",
+        "company": "TechCorp Innovations",
+        "title": "Junior Machine Learning Engineer",
+        "match_percentage": 84,
+        "matched_skills": ["Python", "Machine Learning", "FastAPI"],
+        "status": "Applied",
+        "applied_at": "2026-10-03T11:15:00Z",
+        "status_history": [
+            {"status": "Applied", "updated_at": "2026-10-03T11:15:00Z", "note": "Direct campus application (Demo Data)"}
+        ],
+        # Additive Cached JD Fit Snapshot (Step 2 Demo Data)
+        "jdFitScore": 73,
+        "jdFitVerdict": "PARTIAL_FIT",
+        "jdFitSummary": {
+            "mustHaveCoverage": 71.4,
+            "niceToHaveCoverage": 100.0,
+            "topGaps": ["PyTorch"],
+            "metCount": 4,
+            "totalCount": 5
+        },
+        "jdFitComputedAt": "2026-10-03T11:15:00Z"
+    },
+    {
+        "id": "app_3",
+        "student_id": "std_2",
+        "student_name": "Yuvraj Kadam",
+        "student_email": "yuvraj.kadam@rscoe.edu.in",
+        "college": "JSPM RSCOE, Pune",
+        "institution_id": "inst_rscoe",
+        "department": "Computer Engineering",
+        "department_id": "dept_comp",
+        "opportunity_id": "opp_1",
+        "company": "Barclays India Innovation Centre",
+        "title": "Full-Stack AI Developer Intern",
+        "match_percentage": 78,
+        "matched_skills": ["Python", "Machine Learning"],
+        "status": "Applied",
+        "applied_at": "2026-10-04T09:20:00Z",
+        "status_history": [
+            {"status": "Applied", "updated_at": "2026-10-04T09:20:00Z", "note": "Standard applicant without pre-computed snapshot (Demo Data)"}
+        ],
+        # Uncomputed old row (null fields) to verify on-demand backward compatibility
+        "jdFitScore": None,
+        "jdFitVerdict": None,
+        "jdFitSummary": None,
+        "jdFitComputedAt": None
     }
 ]
 

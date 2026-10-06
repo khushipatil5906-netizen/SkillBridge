@@ -117,6 +117,9 @@ export const AcademicianPortalView: React.FC<AcademicianPortalViewProps> = ({
   // Placement Outcomes State
   const [outcomesData, setOutcomesData] = useState<any>(null);
 
+  // JD Role Gaps Analysis State
+  const [roleGapsData, setRoleGapsData] = useState<any>(null);
+
   // Assessment Integrity Engine State (Requirement 16 & 22)
   const [integrityAudits, setIntegrityAudits] = useState<any>(null);
   const [integrityFilter, setIntegrityFilter] = useState<'ALL' | 'VALID' | 'WARNING' | 'FLAGGED_FOR_REVIEW' | 'DISQUALIFIED'>('ALL');
@@ -125,7 +128,7 @@ export const AcademicianPortalView: React.FC<AcademicianPortalViewProps> = ({
   const loadAllData = async () => {
     setIsLoading(true);
     try {
-      const [dash, stdsRes, gapsRes, demandRes, recsRes, outRes, readRes, intelRes, gapAnRes, intRes, cAnRes, integRes] = await Promise.all([
+      const [dash, stdsRes, gapsRes, demandRes, recsRes, outRes, readRes, intelRes, gapAnRes, intRes, cAnRes, integRes, roleGapsRes] = await Promise.all([
         apiService.getAcademicianDashboard(),
         apiService.getAcademicianStudents({ year: yearFilter, search: searchQuery, email: academicianEmail }),
         apiService.getAcademicianCohortSkillGaps(academicianEmail),
@@ -137,7 +140,8 @@ export const AcademicianPortalView: React.FC<AcademicianPortalViewProps> = ({
         apiService.getIndustryDemandGap(academicianEmail),
         apiService.getTrainingInterventions(academicianEmail),
         apiService.getCohortSkillGapsAnalysis(yearFilter, academicianEmail),
-        apiService.getIntegrityAuditLogs('academician').catch(() => ({ attempts: [] }))
+        apiService.getIntegrityAuditLogs('academician').catch(() => ({ attempts: [] })),
+        apiService.getAcademicianRoleGaps(yearFilter).catch(() => null)
       ]);
 
       setDashboardData(dash);
@@ -151,6 +155,7 @@ export const AcademicianPortalView: React.FC<AcademicianPortalViewProps> = ({
       setIndustryDemand(demandRes?.skills_analysis || []);
       setRecommendations(recsRes?.recommendations || []);
       setOutcomesData(outRes || null);
+      setRoleGapsData(roleGapsRes || null);
 
       setReadinessIndex(readRes?.readiness_index || null);
       setCohortIntelligence(intelRes || null);
@@ -1203,6 +1208,158 @@ export const AcademicianPortalView: React.FC<AcademicianPortalViewProps> = ({
                   )}
                 </div>
               ))}
+            </div>
+
+            {/* Gaps Against Open Roles (JD-Based Role Gap Intelligence) */}
+            <div className="pt-6 border-t border-slate-200 dark:border-slate-800 space-y-4">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div>
+                  <span className="text-[10px] font-mono font-bold text-indigo-600 uppercase tracking-wider block">
+                    Live Industry Role Alignment
+                  </span>
+                  <h3 className="text-base font-black text-slate-900 dark:text-white mt-0.5">
+                    Cohort Skill Gaps Against Live Job Descriptions
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Deterministic evaluation of students against actual required skills and minimum proficiency cutoffs in active campus drives.
+                  </p>
+                </div>
+                {roleGapsData?.roles && (
+                  <span className="text-xs font-mono font-bold px-3 py-1 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                    {roleGapsData.opportunitiesAnalyzed || roleGapsData.roles.length} Active Drives Analyzed
+                  </span>
+                )}
+              </div>
+
+              {/* Roles Summary Grid */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {(roleGapsData?.roles || []).map((role: any) => {
+                  const dist = role.verdictDistribution || { STRONG_FIT: 0, GOOD_FIT: 0, PARTIAL_FIT: 0, WEAK_FIT: 0 };
+                  const totalV = (dist.STRONG_FIT || 0) + (dist.GOOD_FIT || 0) + (dist.PARTIAL_FIT || 0) + (dist.WEAK_FIT || 0) || 1;
+                  const strongPct = Math.round(((dist.STRONG_FIT || 0) / totalV) * 100);
+                  const goodPct = Math.round(((dist.GOOD_FIT || 0) / totalV) * 100);
+                  const partialPct = Math.round(((dist.PARTIAL_FIT || 0) / totalV) * 100);
+                  const weakPct = Math.max(0, 100 - strongPct - goodPct - partialPct);
+
+                  return (
+                    <div
+                      key={role.opportunityId}
+                      className="p-5 rounded-2xl bg-slate-50/70 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 space-y-4 hover:border-indigo-300 dark:hover:border-indigo-700 transition"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <span className="text-[10px] font-mono font-bold uppercase text-slate-400">
+                            {role.company}
+                          </span>
+                          <h4 className="font-bold text-sm text-slate-900 dark:text-white mt-0.5">
+                            {role.title}
+                          </h4>
+                          <p className="text-[11px] text-slate-500">
+                            {role.location} • {role.stipend}
+                          </p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <span className="text-xl font-black text-indigo-600 dark:text-indigo-400">
+                            {role.avgFitScore}%
+                          </span>
+                          <span className="text-[10px] block text-slate-400 font-semibold">Cohort Avg Fit</span>
+                        </div>
+                      </div>
+
+                      {/* Verdict Distribution Bar */}
+                      <div className="space-y-1.5">
+                        <div className="flex justify-between items-center text-[11px]">
+                          <span className="font-bold text-slate-700 dark:text-slate-300">Cohort Fit Verdict Spread:</span>
+                          <span className="font-mono text-slate-500 text-[10px]">
+                            {dist.STRONG_FIT || 0} Strong • {dist.GOOD_FIT || 0} Good • {dist.PARTIAL_FIT || 0} Partial • {dist.WEAK_FIT || 0} Weak
+                          </span>
+                        </div>
+                        <div className="w-full h-2.5 rounded-full bg-slate-200 dark:bg-slate-800 flex overflow-hidden">
+                          <div style={{ width: `${strongPct}%` }} className="bg-emerald-500 h-full" title={`Strong Fit: ${dist.STRONG_FIT || 0} (${strongPct}%)`} />
+                          <div style={{ width: `${goodPct}%` }} className="bg-indigo-500 h-full" title={`Good Fit: ${dist.GOOD_FIT || 0} (${goodPct}%)`} />
+                          <div style={{ width: `${partialPct}%` }} className="bg-amber-500 h-full" title={`Partial Fit: ${dist.PARTIAL_FIT || 0} (${partialPct}%)`} />
+                          <div style={{ width: `${weakPct}%` }} className="bg-rose-500 h-full" title={`Needs Work: ${dist.WEAK_FIT || 0} (${weakPct}%)`} />
+                        </div>
+                        <div className="flex justify-between text-[10px] text-slate-400 pt-0.5">
+                          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" /> Strong ({strongPct}%)</span>
+                          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-indigo-500 inline-block" /> Good ({goodPct}%)</span>
+                          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500 inline-block" /> Partial ({partialPct}%)</span>
+                          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500 inline-block" /> Needs Work ({weakPct}%)</span>
+                        </div>
+                      </div>
+
+                      {/* Top Missing Skills for this Drive */}
+                      {role.topMissingSkills && role.topMissingSkills.length > 0 && (
+                        <div className="space-y-2 pt-2 border-t border-slate-200/80 dark:border-slate-800">
+                          <span className="text-[11px] font-bold text-slate-700 dark:text-slate-300 block">
+                            Key Missing Skills vs Hiring Cutoffs:
+                          </span>
+                          <div className="space-y-2">
+                            {role.topMissingSkills.map((sk: any) => (
+                              <div
+                                key={sk.skill}
+                                className="p-2.5 rounded-xl bg-white dark:bg-card-dark border border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 text-xs"
+                              >
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-bold text-rose-600 dark:text-rose-400">
+                                      ⚠ {sk.skill}
+                                    </span>
+                                    <span className="text-[10px] text-slate-400">
+                                      ({sk.missingCount} students / {sk.percentageOfCohort}% affected)
+                                    </span>
+                                  </div>
+                                  <div className="text-[11px] text-slate-500 mt-0.5">
+                                    Recommended: <strong className="text-slate-700 dark:text-slate-300">{sk.recommendedCourse}</strong> ({sk.provider})
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setRecSkill(sk.skill);
+                                    setRecTitle(sk.recommendedCourse || `${sk.skill} Mastery Lab`);
+                                    setRecProvider(sk.provider || 'SkillBridge Academy');
+                                    setActiveTab('recommendations');
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 text-[11px] font-bold shrink-0 transition cursor-pointer"
+                                >
+                                  Recommend Course →
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* In-demand cross-role gaps highlight strip */}
+              {roleGapsData?.mostInDemandGaps && roleGapsData.mostInDemandGaps.length > 0 && (
+                <div className="p-4 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-100 dark:border-indigo-900/40 space-y-2 mt-4">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                    <h4 className="text-xs font-bold text-indigo-950 dark:text-indigo-200">
+                      Cross-Role Critical Gaps (Demanded Across Multiple Companies)
+                    </h4>
+                  </div>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    {roleGapsData.mostInDemandGaps.map((item: any) => (
+                      <span
+                        key={item.skill}
+                        className="px-2.5 py-1 rounded-lg text-xs font-bold bg-white dark:bg-card-dark text-slate-800 dark:text-slate-200 border border-indigo-200 dark:border-indigo-800 shadow-xs flex items-center gap-1.5"
+                      >
+                        <span className="text-rose-600">●</span>
+                        <span>{item.skill}</span>
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          ({item.demandingRolesCount} roles, {item.affectedPercentage}% cohort deficit)
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
