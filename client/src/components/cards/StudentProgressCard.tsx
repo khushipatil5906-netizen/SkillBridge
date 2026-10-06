@@ -89,7 +89,7 @@ export const StudentProgressCard: React.FC<StudentProgressCardProps> = ({
             >
               <span className="font-semibold text-slate-800 dark:text-slate-200 truncate flex items-center gap-1.5">
                 <Zap className="w-3 h-3 text-amber-500" />
-                <span>45s Aptitude Duel</span>
+                <span>Code Lab & AST Duel</span>
               </span>
               <ArrowRight className="w-3 h-3 text-slate-400 group-hover:translate-x-0.5 transition" />
             </button>

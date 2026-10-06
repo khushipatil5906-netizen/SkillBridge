@@ -125,16 +125,16 @@ export const LeftIconRail: React.FC<LeftIconRailProps> = ({
               <Code2 className="w-4.5 h-4.5" />
             </button>
 
-            {/* 5. Gamified Aptitude Arena */}
+            {/* 5. Algorithmic Code Lab & AST Arena (Upgraded Aptitude) */}
             <button
               onClick={() => setActiveTab('aptitude')}
-              title="Gamified Aptitude Arena (45s Sprints)"
+              title="Algorithmic Code Lab & AST Arena"
               className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${
                 activeTab === 'aptitude'
                   ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-sm'
                   : 'text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/60'
               }`}
-              aria-label="Aptitude Arena"
+              aria-label="Algorithmic Code Lab & AST Arena"
             >
               <Zap className="w-4.5 h-4.5" />
             </button>

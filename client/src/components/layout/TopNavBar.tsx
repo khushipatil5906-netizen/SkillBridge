@@ -35,9 +35,10 @@ export const TopNavBar: React.FC<TopNavBarProps> = ({
       case 'opportunities':
         return 'Campus Drives & TPO Gatekeeper';
       case 'codelab':
-        return 'Algorithmic AST Code Lab';
+      case 'code-lab':
+        return 'Algorithmic Code Lab & AST Auditor';
       case 'aptitude':
-        return 'Gamified Aptitude Arena';
+        return 'Algorithmic Code Lab & AST Auditor';
       case 'collaboration':
       case 'project-hub':
         return 'Project & Research Collaboration Hub';

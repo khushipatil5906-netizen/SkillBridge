@@ -113,7 +113,7 @@ export const App: React.FC = () => {
       if (cleanPath === '/passport' || cleanPath === '/skill-passport' || cleanPath === '/workflow' || cleanPath === '/journey') return 'passport';
       if (cleanPath === '/collaboration' || cleanPath === '/project-hub' || cleanPath === '/projects') return 'collaboration';
       if (cleanPath === '/opportunities') return 'opportunities';
-      if (cleanPath === '/codelab') return 'codelab';
+      if (cleanPath === '/codelab' || cleanPath === '/code-lab') return 'codelab';
       if (cleanPath === '/aptitude') return 'aptitude';
       if (cleanPath === '/transcript') return 'transcript';
       if (cleanPath === '/profile') return 'profile';
@@ -156,6 +156,7 @@ export const App: React.FC = () => {
       projects: '/collaboration',
       opportunities: '/opportunities',
       codelab: '/codelab',
+      'code-lab': '/code-lab',
       aptitude: '/aptitude',
       transcript: '/transcript',
       profile: '/profile',
@@ -518,6 +519,7 @@ export const App: React.FC = () => {
             />
           );
         case 'codelab':
+        case 'code-lab':
           return <CodeLabView />;
         case 'aptitude':
           return <AptitudeArenaView />;

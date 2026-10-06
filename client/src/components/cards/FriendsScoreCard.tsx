@@ -170,7 +170,7 @@ export const FriendsScoreCard: React.FC<FriendsScoreCardProps> = ({ peers, role,
             onClick={() => onNavigateTab('aptitude')}
             className="text-[11px] font-semibold text-slate-800 dark:text-slate-200 hover:underline flex items-center gap-1 group"
           >
-            <span>Challenge in 45s Aptitude Duel</span>
+            <span>Challenge in Code Lab & AST Duel</span>
             <ArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition" />
           </button>
         )}
