@@ -5,6 +5,8 @@
 > **Team:** Team Dominator (JSPM's Rajarshi Shahu College of Engineering, Pune)  
 > **Team Members:** Yuvraj Kadam, Nimisha Joshi, Khushi Patil, Dhruv Patil  
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/khushipatil5906-netizen/SkillBridge)
+
 ---
 
 ## 🌟 Overview
