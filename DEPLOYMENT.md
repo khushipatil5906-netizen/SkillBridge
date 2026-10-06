@@ -116,7 +116,80 @@ SkillBridge is designed to operate behind TLS termination. To configure SSL with
 
 ---
 
-## 4. Docker Deployment Instructions
+## 4. One-Click Cloud Deployment (Render & Vercel)
+
+SkillBridge is pre-configured for automated deployment on **Render** (FastAPI backend + AI ML models) and **Vercel** (high-speed global edge React SPA).
+
+---
+
+### Option A: Vercel (Frontend) + Render (Backend) [Recommended]
+
+This is the fastest and most scalable setup: Vercel serves the React SPA from edge nodes worldwide, while Render hosts the Python FastAPI server with its scikit-learn ML models.
+
+#### Step 1: Deploy Backend on Render (2 minutes)
+1. Sign in to [Render](https://dashboard.render.com/) with GitHub.
+2. Click **New +** -> **Web Service**.
+3. Connect your repository (`khushipatil5906-netizen/SkillBridge`).
+4. Configure the service settings:
+   - **Name**: `skillbridge-api`
+   - **Region**: Choose closest to you (e.g., Oregon or Frankfurt)
+   - **Root Directory**: `server`
+   - **Runtime**: `Python 3`
+   - **Build Command**: `pip install -r requirements.txt`
+   - **Start Command**: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+   - **Instance Type**: Free
+5. Under **Advanced** -> **Health Check Path**, enter: `/health`
+6. Add Environment Variables:
+   - `ENVIRONMENT` = `production`
+   - `HOST` = `0.0.0.0`
+7. Click **Create Web Service**.
+8. Wait for deployment to finish and copy your Render URL (e.g., `https://skillbridge-api.onrender.com`).
+
+#### Step 2: Deploy Frontend on Vercel (2 minutes)
+1. Sign in to [Vercel](https://vercel.com/) with GitHub.
+2. Click **Add New...** -> **Project**.
+3. Import `SkillBridge`.
+4. Configure project settings:
+   - **Framework Preset**: `Vite`
+   - **Root Directory**: Click `Edit` and select `client`
+   - **Build Command**: `npm run build`
+   - **Output Directory**: `dist`
+5. Under **Environment Variables**, add:
+   - `VITE_API_BASE_URL` = `https://skillbridge-api.onrender.com/api` (replace with your Render backend URL from Step 1)
+   - (Optional) Firebase keys from your `.env` if using live Firebase auth.
+6. Click **Deploy**.
+7. Vercel will build and assign you a production URL (e.g., `https://skillbridge.vercel.app`). All React Router paths and API requests will work out-of-the-box!
+
+---
+
+### Option B: 100% on Render via Blueprint (`render.yaml`)
+
+Deploy both Backend and Frontend together on Render using the pre-configured Infrastructure-as-Code Blueprint:
+
+1. Sign in to [Render](https://dashboard.render.com/).
+2. Click **New +** -> **Blueprint**.
+3. Connect `khushipatil5906-netizen/SkillBridge`.
+4. Render will automatically parse [render.yaml](file:///render.yaml) and create:
+   - `skillbridge-api`: Python FastAPI Web Service
+   - `skillbridge-web`: React SPA Static Site (with automatic route rewrites to prevent 404s)
+5. Click **Apply**.
+6. Both services will build and deploy automatically!
+
+---
+
+### Option C: Unified Docker Deployment on Render / Cloud Run
+
+Deploy the entire stack (Nginx + React SPA + FastAPI ML Engine) inside a single container:
+
+1. On Render, click **New +** -> **Web Service**.
+2. Connect `SkillBridge`.
+3. Select **Docker** environment (Root Directory left empty).
+4. Render will read [Dockerfile](file:///Dockerfile) and [docker-entrypoint.sh](file:///docker-entrypoint.sh), dynamically binding Nginx to Render's public `$PORT`.
+5. Click **Create Web Service**.
+
+---
+
+## 5. Docker Deployment Instructions (Local / VPS)
 
 SkillBridge includes production container definitions in `Dockerfile` and `docker-compose.yml`.
 
@@ -138,8 +211,9 @@ Services exposed:
 
 ---
 
-## 5. Cookie Consent & Analytics Compliance
+## 6. Cookie Consent & Analytics Compliance
 
 - **No Unauthorized Tracking:** All analytics tracking hooks are disabled by default.
 - **Consent Gate:** Web analytics scripts only initialize when the user selects `[Accept All]` or enables optional cookies in `[Manage Preferences]`.
 - **Zero Sensitive Data:** Passwords, test answer tokens, student contact details, and resume files are strictly excluded from all telemetry payloads.
+

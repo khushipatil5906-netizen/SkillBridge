@@ -15,7 +15,10 @@ import {
 } from '../types';
 import { PROCTORING_CONFIG } from '../config/proctoring';
 
-export const API_BASE = '/api';
+const envApiBase = import.meta.env.VITE_API_BASE_URL as string | undefined;
+export const API_BASE = envApiBase
+  ? (envApiBase.endsWith('/api') ? envApiBase : `${envApiBase.replace(/\/$/, '')}/api`)
+  : '/api';
 
 // Fallback high-fidelity seed data if backend is offline or restarting
 export const FALLBACK_STUDENT: StudentProfile = {

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { X, CheckCircle2, AlertTriangle, ShieldCheck, QrCode, FileText, ArrowRight, Sparkles, Award } from 'lucide-react';
-import { apiService } from '../../services/api';
+import { apiService, API_BASE } from '../../services/api';
 
 interface AssessmentModalProps {
   isOpen: boolean;
@@ -61,7 +61,7 @@ export const AssessmentModal: React.FC<AssessmentModalProps> = ({
   const handleSubmitTest = async () => {
     setSubmitting(true);
     try {
-      const res = await fetch('/api/assessments/submit', {
+      const res = await fetch(`${API_BASE}/assessments/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -113,7 +113,7 @@ export const AssessmentModal: React.FC<AssessmentModalProps> = ({
     setCertResult(null);
 
     try {
-      const res = await fetch('/api/assessments/verify-certificate', {
+      const res = await fetch(`${API_BASE}/assessments/verify-certificate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

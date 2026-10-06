@@ -7,7 +7,7 @@ load_dotenv()
 class Settings(BaseModel):
     APP_NAME: str = "SkillBridge API"
     APP_VERSION: str = "3.0.0"
-    HOST: str = os.getenv("HOST", "127.0.0.1")
+    HOST: str = os.getenv("HOST", "0.0.0.0")
     PORT: int = int(os.getenv("PORT", "8000"))
     
     # API Keys (Optional - offline fallback is active by default)
